@@ -71,6 +71,12 @@ object SparkApp {
       sparkConf ++ Map(
         SPARK_YARN_TAG_KEY -> mergedYarnTags,
         "spark.yarn.submit.waitAppCompletion" -> "false")
+    } else if (livyConf.isRunningOnKubernetes()) {
+      import KubernetesConfig._
+      sparkConf ++ Map(
+        s"spark.kubernetes.driver.label.$KUBERNETES_SPARK_APP_TAG_LABEL" → uniqueAppTag,
+        s"spark.kubernetes.executor.label.$KUBERNETES_SPARK_APP_TAG_LABEL" → uniqueAppTag
+      )
     } else {
       sparkConf
     }
@@ -89,6 +95,8 @@ object SparkApp {
       listener: Option[SparkAppListener]): SparkApp = {
     if (livyConf.isRunningOnYarn()) {
       new SparkYarnApp(uniqueAppTag, appId, process, listener, livyConf)
+    } else if (livyConf.isRunningOnKubernetes()) {
+      new SparkKubernetesApp(uniqueAppTag, appId, process, listener, livyConf)
     } else {
       require(process.isDefined, "process must not be None when Livy master is not YARN.")
       new SparkProcApp(process.get, listener)

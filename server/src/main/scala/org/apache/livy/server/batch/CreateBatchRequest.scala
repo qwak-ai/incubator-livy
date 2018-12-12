@@ -43,6 +43,7 @@ class CreateBatchRequest {
       (if (jars.nonEmpty) s"jars: ${jars.mkString(",")}, " else "") +
       (if (pyFiles.nonEmpty) s"pyFiles: ${pyFiles.mkString(",")}, " else "") +
       (if (files.nonEmpty) s"files: ${files.mkString(",")}, " else "") +
+      (if (className.isDefined) s"className: ${className.get}") +
       (if (archives.nonEmpty) s"archives: ${archives.mkString(",")}, " else "") +
       (if (driverMemory.isDefined) s"driverMemory: ${driverMemory.get}, " else "") +
       (if (driverCores.isDefined) s"driverCores: ${driverCores.get}, " else "") +

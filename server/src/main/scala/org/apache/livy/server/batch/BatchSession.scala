@@ -19,9 +19,10 @@ package org.apache.livy.server.batch
 
 import java.lang.ProcessBuilder.Redirect
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.UUID
 
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
-import scala.util.Random
+import scala.util.{Random, Try}
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 
@@ -61,12 +62,30 @@ object BatchSession extends Logging {
       mockApp: Option[SparkApp] = None): BatchSession = {
     val appTag = s"livy-batch-$id-${Random.alphanumeric.take(8).mkString}"
 
+    def getAppId(appId: Option[String], appName: Option[String], className: Option[String]): String = {
+      def formatAppId(appId: String): String = {
+        val formatted = s"stub.$appId".split("\\.").last.toLowerCase().replaceAll("""[\p{Punct}\p{Space}]""", "")
+        val shortened = if (formatted.length > 32) formatted.substring(0, 32) else formatted
+        s"$shortened-${System.currentTimeMillis()}"
+      }
+      if (appId.isDefined) {
+        appId.get
+      } else if (appName.isDefined) {
+        formatAppId(appName.get)
+      } else if (className.isDefined) {
+        formatAppId(className.get)
+      } else {
+        s"spark-${UUID.randomUUID().toString.replaceAll("-", "")}"
+      }
+    }
+
     def createSparkApp(s: BatchSession): SparkApp = {
+      val customConf = if (livyConf.isRunningOnKubernetes()) Map("spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className)) else Map()
       val conf = SparkApp.prepareSparkConf(
         appTag,
         livyConf,
         prepareConf(
-          request.conf, request.jars, request.files, request.archives, request.pyFiles, livyConf))
+          request.conf ++ customConf, request.jars, request.files, request.archives, request.pyFiles, livyConf))
       require(request.file != null, "File is required.")
 
       val builder = new SparkProcessBuilder(livyConf)
@@ -179,8 +198,8 @@ class BatchSession(
           info(s"Batch session $id created [appid: ${appId.orNull}, state: ${state.toString}, " +
             s"info: ${appInfo.asJavaMap}]")
         case SparkApp.State.FINISHED => _state = SessionState.Success()
-        case SparkApp.State.KILLED | SparkApp.State.FAILED =>
-          _state = SessionState.Dead()
+        case SparkApp.State.KILLED => _state = SessionState.Killed()
+        case SparkApp.State.FAILED => _state = SessionState.Dead()
         case _ =>
       }
     }

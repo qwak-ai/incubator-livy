@@ -27,6 +27,8 @@ var entityMap = {
   '=': '&#x3D;'
 };
 
+var basePath = "";
+
 function escapeHtml(string) {
   return String(string).replace(/[&<>"'`=\/]/g, function fromEntityMap (s) {
     return entityMap[s];
@@ -34,11 +36,33 @@ function escapeHtml(string) {
 }
 
 function uiLink(relativePath, inner) {
-  return anchorLink("/ui/" + relativePath, inner);
+  return anchorLink(prependBasePath("/ui/") + relativePath, inner);
 }
 
 function anchorLink(link, inner) {
   return '<a href="' + link + '">' + inner + "</a>";
+}
+
+function killLink(id, inner) {
+  return '<input id="killjob" type="button" value="' + inner + '" onclick="deleteConfirm(' + id + ');" />';
+}
+
+function historyServerLink(session) {
+  var historyServerUrl = session.appInfo.historyServerUrl;
+  if (historyServerUrl != null && session.state != "running") {
+    return anchorLink(historyServerUrl, session.appId + " history")
+  } else {
+    return session.appId;
+  }
+}
+
+function sparkUiLink(session) {
+  var sparkUiUrl = session.appInfo.sparkUiUrl;
+  if (sparkUiUrl != null && session.state == "running") {
+    return anchorLink(sparkUiUrl, session.appId + " UI")
+  } else {
+    return session.appId;
+  }
 }
 
 function driverLogLink(session) {
@@ -58,10 +82,10 @@ function logLinks(session, kind) {
 
 function appIdLink(session) {
   var appUiUrl = session.appInfo.sparkUiUrl;
-  if (appUiUrl != null) {
-    return anchorLink(appUiUrl, session.appId);
+  if (session.state == "running") {
+    return sparkUiLink(session);
   } else {
-    return session.appId;
+    return historyServerLink(session);
   }
 }
 
@@ -89,10 +113,20 @@ function progressBar(double) {
 
 function getPathArray() {
   var pathArr = location.pathname.split("/");
+  var baseUrlEnd = 2 + (basePath.match(/\//g) || []).length;
+  pathArr.splice(0, baseUrlEnd);
   pathArr.splice(0, 2);
   return pathArr;
 }
 
+function setBasePath(path) {
+  basePath = path;
+}
+
+function prependBasePath(path) {
+  return basePath + path;
+}
+
 $.extend( $.fn.dataTable.defaults, {
-  stateSave: true,
+  stateSave: true
 });

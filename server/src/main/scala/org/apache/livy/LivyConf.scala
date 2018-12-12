@@ -61,6 +61,7 @@ object LivyConf {
 
   val SERVER_HOST = Entry("livy.server.host", "0.0.0.0")
   val SERVER_PORT = Entry("livy.server.port", 8998)
+  val SERVER_BASE_PATH = Entry("livy.ui.basePath", "")
 
   val UI_ENABLED = Entry("livy.ui.enabled", true)
 
@@ -248,6 +249,9 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
 
   /** Return true if spark master starts with yarn. */
   def isRunningOnYarn(): Boolean = sparkMaster().startsWith("yarn")
+
+  /** Return true if spark master contains k8s. */
+  def isRunningOnKubernetes(): Boolean = sparkMaster().contains("k8s")
 
   /** Return the spark deploy mode Livy sessions should use. */
   def sparkDeployMode(): Option[String] = Option(get(LIVY_SPARK_DEPLOY_MODE)).filterNot(_.isEmpty)

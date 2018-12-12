@@ -30,6 +30,10 @@ object LivySparkUtils extends Logging {
   // For each Spark version we supported, we need to add this mapping relation in case Scala
   // version cannot be detected from "spark-submit --version".
   private val _defaultSparkScalaVersion = SortedMap(
+    // Spark 2.4 + Scala 2.11
+    (2, 4) -> "2.11",
+    // Spark 2.3 + Scala 2.11
+    (2, 3) -> "2.11",
     // Spark 2.2 + Scala 2.11
     (2, 2) -> "2.11",
     // Spark 2.1 + Scala 2.11
@@ -41,8 +45,8 @@ object LivySparkUtils extends Logging {
   )
 
   // Supported Spark version
-  private val MIN_VERSION = (1, 6)
-  private val MAX_VERSION = (2, 3)
+  private val MIN_VERSION = (2, 2)
+  private val MAX_VERSION = (3, 0)
 
   private val sparkVersionRegex = """version (.*)""".r.unanchored
   private val scalaVersionRegex = """Scala version (.*), Java""".r.unanchored

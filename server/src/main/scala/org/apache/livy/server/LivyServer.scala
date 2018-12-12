@@ -41,7 +41,7 @@ import org.apache.livy.server.ui.UIServlet
 import org.apache.livy.sessions.{BatchSessionManager, InteractiveSessionManager}
 import org.apache.livy.sessions.SessionManager.SESSION_RECOVERY_MODE_OFF
 import org.apache.livy.utils.LivySparkUtils._
-import org.apache.livy.utils.SparkYarnApp
+import org.apache.livy.utils.{SparkKubernetesApp, SparkYarnApp}
 
 class LivyServer extends Logging {
 
@@ -62,6 +62,7 @@ class LivyServer extends Logging {
 
     val host = livyConf.get(SERVER_HOST)
     val port = livyConf.getInt(SERVER_PORT)
+    val basePath = livyConf.get(SERVER_BASE_PATH)
     val multipartConfig = MultipartConfig(
         maxFileSize = Some(livyConf.getLong(LivyConf.FILE_UPLOAD_MAX_SIZE))
       ).toMultipartConfigElement
@@ -119,10 +120,13 @@ class LivyServer extends Logging {
 
     testRecovery(livyConf)
 
-    // Initialize YarnClient ASAP to save time.
+    // Initialize YarnClient/KubernetesClient ASAP to save time.
     if (livyConf.isRunningOnYarn()) {
       SparkYarnApp.init(livyConf)
       Future { SparkYarnApp.yarnClient }
+    } else if (livyConf.isRunningOnKubernetes()) {
+      SparkKubernetesApp.init(livyConf)
+      Future { SparkKubernetesApp.kubernetesClient}
     }
 
     StateStore.init(livyConf)
@@ -198,12 +202,12 @@ class LivyServer extends Logging {
             mount(context, batchServlet, "/batches/*")
 
             if (livyConf.getBoolean(UI_ENABLED)) {
-              val uiServlet = new UIServlet
+              val uiServlet = new UIServlet(basePath, livyConf)
               mount(context, uiServlet, "/ui/*")
               mount(context, staticResourceServlet, "/static/*")
-              mount(context, uiRedirectServlet("/ui/"), "/*")
+              mount(context, uiRedirectServlet(basePath + "/ui/"), "/*")
             } else {
-              mount(context, uiRedirectServlet("/metrics"), "/*")
+              mount(context, uiRedirectServlet(basePath + "/metrics"), "/*")
             }
 
             context.mountMetricsAdminServlet("/metrics")

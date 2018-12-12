@@ -42,6 +42,7 @@ function parseLog(logLines) {
   var stdoutLines = logLines;
   var stderrLines = [];
   var yarnDiagLines = null;
+  var kubernetesDiagLines = null;
 
   for (var i = 1; i < logLines.length; i++) {
     if (stderrIndex == 0 && logLines[i].startsWith("\nstderr")) {
@@ -52,17 +53,23 @@ function parseLog(logLines) {
       stderrLines = logLines.slice(stderrIndex + 1, i);
       yarnDiagLines = logLines.slice(i + 1, logLines.length);
       break;
+    } else if (logLines[i].startsWith("\nKubernetes Diagnostics")) {
+      stderrLines = logLines.slice(stderrIndex + 1, i);
+      kubernetesDiagLines = logLines.slice(i + 1, logLines.length);
+      break;
     }
   }
 
   var stdoutLog = logHeader("stdout") + preWrap(stdoutLines.join("\n"));
   var stderrLog = logHeader("stderr") + preWrap(stderrLines.join("\n"));
-  var yarnDiagLog = "";
+  var diagLog = "";
   if (yarnDiagLines != null) {
-    yarnDiagLog = "<h4>YARN Diagnostics</h4>" + preWrap(yarnDiagLines.join("\n"));
+    diagLog = "<h4>YARN Diagnostics</h4>" + preWrap(yarnDiagLines.join("\n"));
+  } else if (kubernetesDiagLines != null) {
+    diagLog = "<h4>Kubernetes Diagnostics</h4>" + preWrap(kubernetesDiagLines.join("\n"));
   }
 
-  return stdoutLog + stderrLog + yarnDiagLog;
+  return stdoutLog + stderrLog + diagLog;
 }
 
 $(document).ready(function () {
@@ -70,7 +77,7 @@ $(document).ready(function () {
   var type = pathArr.shift();
   var id = pathArr.shift();
 
-  $.getJSON(location.origin + getLogPath(type, id), {size: -1}, function(response) {
+  $.getJSON(location.origin + prependBasePath(getLogPath(type, id)), {size: -1}, function(response) {
     if (response) {
       $("#session-log").append(parseLog(response.log));
       $('#session-log [data-toggle="tooltip"]').tooltip();
