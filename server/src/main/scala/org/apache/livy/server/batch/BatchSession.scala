@@ -23,15 +23,14 @@ import java.util.UUID
 
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 import scala.util.{Random, Try}
-
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-
+import io.fabric8.kubernetes.api.model.{NamespaceBuilder, SecretBuilder}
 import org.apache.livy.{LivyConf, Logging, Utils}
 import org.apache.livy.server.recovery.SessionStore
 import org.apache.livy.server.SessionServlet
 import org.apache.livy.sessions.{Session, SessionState}
 import org.apache.livy.sessions.Session._
-import org.apache.livy.utils.{AppInfo, SparkApp, SparkAppListener, SparkProcessBuilder}
+import org.apache.livy.utils._
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 case class BatchRecoveryMetadata(
@@ -80,7 +79,27 @@ object BatchSession extends Logging {
     }
 
     def createSparkApp(s: BatchSession): SparkApp = {
-      val customConf = if (livyConf.isRunningOnKubernetes()) Map("spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className)) else Map()
+      val customConf = if (livyConf.isRunningOnKubernetes()) {
+        val client = SparkKubernetesApp.kubernetesClient
+        client.namespaces().create(
+            new NamespaceBuilder()
+              .withNewMetadata().withName(appTag).endMetadata()
+              .build()
+          )
+        client.secrets().create(
+          new SecretBuilder()
+            .withNewMetadata().withName("rsegdev-acr-secret").withNamespace(appTag).endMetadata()
+            .withType("kubernetes.io/dockerconfigjson")
+            .addToData(".dockerconfigjson", "eyJhdXRocyI6eyJyc2VnZGV2LmF6dXJlY3IuaW8iOnsiYXV0aCI6ImNuTmxaMlJsZGpweU4zSlNhVTgzWTA1aVVFZzRUMnc0YzFGM1FsTTNVV0k1SzJoek5FNDRWUT09In19fQ==")
+            .build()
+        )
+        Map(
+          "spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
+          "spark.kubernetes.namespace" → appTag
+        )
+      } else {
+        Map()
+      }
       val conf = SparkApp.prepareSparkConf(
         appTag,
         livyConf,

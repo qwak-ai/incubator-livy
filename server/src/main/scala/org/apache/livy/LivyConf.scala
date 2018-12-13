@@ -62,6 +62,8 @@ object LivyConf {
   val SERVER_HOST = Entry("livy.server.host", "0.0.0.0")
   val SERVER_PORT = Entry("livy.server.port", 8998)
   val SERVER_BASE_PATH = Entry("livy.ui.basePath", "")
+  val SERVER_PROXY_URL = Entry("livy.ui.proxyUrl", "")
+  val HISTORY_SERVER_URL = Entry("livy.ui.historyServerUrl", "")
 
   val UI_ENABLED = Entry("livy.ui.enabled", true)
 
@@ -141,6 +143,12 @@ object LivyConf {
   val YARN_APP_LEAKAGE_CHECK_TIMEOUT = Entry("livy.server.yarn.app-leakage.check-timeout", "600s")
   // how often to check livy session leakage
   val YARN_APP_LEAKAGE_CHECK_INTERVAL = Entry("livy.server.yarn.app-leakage.check-interval", "60s")
+
+  // Kubernetes configs
+  val KUBERNETES_APP_LOOKUP_TIMEOUT = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
+  val KUBERNETES_POLL_INTERVAL = Entry("livy.server.kubernetes.poll-interval", "5s")
+  val KUBERNETES_GC_CHECK_TIMEOUT = Entry("livy.server.kubernetes.gc.check-interval", "1h")
+  val KUBERNETES_GC_TTL = Entry("livy.server.kubernetes.gc.ttl", "24h")
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"

@@ -115,7 +115,6 @@ function getPathArray() {
   var pathArr = location.pathname.split("/");
   var baseUrlEnd = 2 + (basePath.match(/\//g) || []).length;
   pathArr.splice(0, baseUrlEnd);
-  pathArr.splice(0, 2);
   return pathArr;
 }
 
