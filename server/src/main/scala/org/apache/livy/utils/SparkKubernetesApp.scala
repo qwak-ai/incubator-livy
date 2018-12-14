@@ -20,10 +20,11 @@ import java.lang
 import java.util.UUID
 import java.util.concurrent.TimeoutException
 
-import io.fabric8.kubernetes.api.model.{ConfigBuilder => _, _}
+import io.fabric8.kubernetes.api.model.{ConfigBuilder ⇒ _, _}
 import io.fabric8.kubernetes.client._
 import io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable
-import org.apache.livy.LivyConf
+import org.apache.livy.{LivyConf, Logging, Utils}
+import org.joda.time.{DateTime, DateTimeZone}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -35,13 +36,14 @@ import scala.util.Try
 
 object SparkKubernetesApp extends Logging {
 
-  import KubernetesConstants._
+  import KubernetesExtensions._
+  import KubernetesUtils._
 
   def init(livyConf: LivyConf): Unit = {
     cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
-    // TODO add to LivyConf
-    gcTtl = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_TTL)
-    gcCheckTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_CHECK_TIMEOUT)
+    sparkNamespacePrefix = livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX)
+    gcTtl = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_TTL).milliseconds
+    gcCheckTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_CHECK_TIMEOUT).milliseconds
     logger.info(
       s"Initialized SparkKubernetesApp: " +
         s"master=[${livyConf.sparkMaster()}] " +
@@ -53,12 +55,10 @@ object SparkKubernetesApp extends Logging {
     kubernetesNamespaceGcThread.start()
   }
 
-  private var gcCheckTimeout: Long = _
-  private var gcTtl: Long = _
-
-  private val outdatedAppTags = new java.util.concurrent.ConcurrentHashMap[String, Long]()
-
-  private var cacheLogSize: Int = _
+  private var cacheLogSize        : Int            = _
+  private var sparkNamespacePrefix: String         = _
+  private var gcTtl               : FiniteDuration = _
+  private var gcCheckTimeout      : FiniteDuration = _
 
   // KubernetesClient is thread safe. Create once, share it across threads.
   lazy val kubernetesClient: DefaultKubernetesClient = {
@@ -73,34 +73,15 @@ object SparkKubernetesApp extends Logging {
   }
 
   private def getKubernetesTagToAppIdTimeout(livyConf: LivyConf): FiniteDuration =
-    livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT) milliseconds
+    livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT).milliseconds
 
   private def getKubernetesPollInterval(livyConf: LivyConf): FiniteDuration =
-    livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL) milliseconds
-
-  private def parseCreationTime(hasMetadata: HasMetadata): Long = {
-    import org.joda.time.DateTime
-    DateTime.parse(hasMetadata.getMetadata.getCreationTimestamp.getTime).toDate.getTime
-  }
-
-  private def isSparkDriver(pod: Pod): Boolean = {
-    pod.getMetadata.getLabels.containsKey(KUBERNETES_SPARK_ROLE_LABEL) &&
-      pod.getMetadata.getLabels.get(KUBERNETES_SPARK_ROLE_LABEL) == KUBERNETES_SPARK_ROLE_DRIVER
-  }
-
-  private def isSparkDriverExpired(driver: Pod, expireTimestamp: Long): Boolean = {
-    val phase = driver.getStatus.getPhase.toLowerCase
-    val creationTime = parseCreationTime(driver)
-    creationTime > expireTimestamp && (Seq("error", "completed").contains(phase) || phase.contains("backoff"))
-  }
+    livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL).milliseconds
 
   private val kubernetesNamespaceGcThread = new Thread() {
     override def run(): Unit = {
       while (true) {
-        val expireTimestamp = System.currentTimeMillis() - gcTtl
-
-        val sparkNamespaces = kubernetesClient.namespaces().list().getItems.asScala
-          .filter(_.getMetadata.getName.startsWith("livy-"))
+        val sparkNamespaces = kubernetesClient.getNamespacesWithPrefix(sparkNamespacePrefix)
 
         val sparkNamespacesWithoutDrivers = sparkNamespaces.filterNot(ns ⇒
           kubernetesClient.pods.inNamespace(ns.getMetadata.getName).list.getItems.asScala.exists(isSparkDriver)
@@ -108,63 +89,62 @@ object SparkKubernetesApp extends Logging {
         val sparkNamespacesWithDrivers = sparkNamespaces -- sparkNamespacesWithoutDrivers
 
         val sparkNamespacesToDelete =
-          sparkNamespacesWithoutDrivers
-            .filter(ns ⇒ parseCreationTime(ns) > expireTimestamp) ++
+          sparkNamespacesWithoutDrivers.filter(isExpired(_, gcTtl)) ++
             sparkNamespacesWithDrivers
-              .filter(ns ⇒
-                kubernetesClient.pods.inNamespace(ns.getMetadata.getName).list.getItems.asScala
-                  .filter(isSparkDriver)
-                  .forall(isSparkDriverExpired(_, expireTimestamp))
+              .filter(ns ⇒ kubernetesClient.pods.inNamespace(ns.getMetadata.getName).list.getItems.asScala
+                .filter(isSparkDriver)
+                .forall(isSparkDriverExpired(_, gcTtl))
               )
         if (sparkNamespacesToDelete.nonEmpty) {
           info(s"GC outdated apps: ${sparkNamespacesToDelete.map(_.getMetadata.getName).mkString(", ")}")
           kubernetesClient.namespaces.delete(sparkNamespacesToDelete: _*)
         }
-        Thread.sleep(gcCheckTimeout)
+        Clock.sleep(gcCheckTimeout.toMillis)
       }
     }
   }
 }
 
 class SparkKubernetesApp private[utils](
-                                         appTag: String,
-                                         appIdOption: Option[String],
-                                         process: Option[LineBufferedProcess],
-                                         listener: Option[SparkAppListener],
-                                         livyConf: LivyConf,
-                                         kubernetesClient: => KubernetesClient = SparkKubernetesApp.kubernetesClient) // For unit test. TODO ???
+    appTag: String,
+    appIdOption: Option[String],
+    process: Option[LineBufferedProcess],
+    listener: Option[SparkAppListener],
+    livyConf: LivyConf,
+    kubernetesClient: => KubernetesClient = SparkKubernetesApp.kubernetesClient) // For unit test. TODO ???
   extends SparkApp
     with Logging {
 
   import KubernetesConstants._
+  import KubernetesExtensions._
+  import KubernetesUtils._
+  import SparkApp.State._
   import SparkKubernetesApp._
 
-  private val appIdPromise: Promise[String] = Promise()
-  private[utils] var state: SparkApp.State = SparkApp.State.STARTING
-  private var kubernetesDiagnostics: IndexedSeq[String] = IndexedSeq.empty[String]
-  private var kubernetesAppLog: IndexedSeq[String] = IndexedSeq.empty[String]
+  private        val appIdPromise         : Promise[String]           = Promise()
+  private[utils] var state                : SparkApp.State            = SparkApp.State.STARTING
+  private        val runningStates        : Seq[SparkApp.State.Value] = Seq(STARTING, RUNNING)
+  private        var kubernetesDiagnostics: IndexedSeq[String]        = IndexedSeq.empty[String]
+  private        var kubernetesAppLog     : IndexedSeq[String]        = IndexedSeq.empty[String]
 
-  // TODO ???
+  // TODO cache log $logSize, watch and persist full log
   override def log(): IndexedSeq[String] =
-  ("stdout: " +: kubernetesAppLog) ++
-    ("\nstderr: " +: (process.map(_.inputLines).getOrElse(ArrayBuffer.empty[String]) ++ process.map(_.errorLines).getOrElse(ArrayBuffer.empty[String]))) ++
-    ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
+    ("stdout: " +: kubernetesAppLog) ++
+      ("\nstderr: " +: (process.map(_.inputLines).getOrElse(ArrayBuffer.empty[String]) ++ process.map(_.errorLines).getOrElse(ArrayBuffer.empty[String]))) ++
+      ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
 
   override def kill(): Unit = synchronized {
     if (isRunning) {
       try {
-        kubernetesClient.selectSparkDrivers()
-          .withLabel(KUBERNETES_SPARK_APP_ID_LABEL, appIdOption.get) // TODO callGetAppId to catch errors when appId is not defined
-          .delete()
+        // TODO flush log and collect all the diagnostics information
+        kubernetesClient.deleteNamespace(appTag)
       } catch {
-        // TODO adopt to Kubernetes
-        // We cannot kill the YARN app without the app id.
-        // There's a chance the YARN app hasn't been submitted during a livy-server failure.
-        // We don't want a stuck session that can't be deleted. Emit a warning and move on.
+        // TODO analyse possible exceptions and handle them
         case _: TimeoutException | _: InterruptedException =>
           warn("Deleting a session while its Kubernetes application is not found.")
           kubernetesAppMonitorThread.interrupt()
       } finally {
+        // TODO persist collected data
         process.foreach(_.destroy())
       }
     }
@@ -178,18 +158,17 @@ class SparkKubernetesApp private[utils](
   }
 
   private def getAppIdFromTag(
-                               appTag: String,
-                               pollInterval: Duration,
-                               deadline: Deadline): Option[String] = {
+      appTag: String,
+      pollInterval: Duration,
+      deadline: Deadline): Option[String] = {
     val driver = kubernetesClient.getSparkDriverByAppTag(appTag)
     if (driver.isDefined) {
       Option(driver.get.getMetadata.getLabels.get(KUBERNETES_SPARK_APP_ID_LABEL))
     } else {
       if (deadline.isOverdue) {
-        process.foreach(_.destroy())
-        outdatedAppTags.put(appTag, System.currentTimeMillis())
+        kill()
         throw new Exception(s"No Kubernetes application is found with tag $appTag in " +
-          livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT) / 1000 + " seconds. " +
+          getKubernetesTagToAppIdTimeout(livyConf) / 1000 + " seconds. " +
           "Please check your cluster status, it is may be very busy.")
       } else {
         Clock.sleep(pollInterval.toMillis)
@@ -198,20 +177,17 @@ class SparkKubernetesApp private[utils](
     }
   }
 
-  private def isRunning: Boolean = {
-    import SparkApp.State._
-    !Seq(FAILED, FINISHED, KILLED).contains(state)
-  }
+  private def isRunning: Boolean = runningStates.contains(state)
 
   // Exposed for unit test.
   private[utils] def mapKubernetesState(kubernetesPodStatus: Option[PodStatus]): SparkApp.State.Value = {
     val state = Try(kubernetesPodStatus.get.getPhase.toLowerCase).getOrElse("error")
     state match {
       case "pending" | "containercreating" => SparkApp.State.STARTING
-      case "running" => SparkApp.State.RUNNING
-      case "completed" => SparkApp.State.FINISHED
-      case "failed" | "error" => SparkApp.State.FAILED
-      case _ => SparkApp.State.KILLED
+      case "running"                       => SparkApp.State.RUNNING
+      case "completed"                     => SparkApp.State.FINISHED
+      case "failed" | "error"              => SparkApp.State.FAILED
+      case _                               => SparkApp.State.KILLED
     }
   }
 
@@ -241,23 +217,16 @@ class SparkKubernetesApp private[utils](
         try {
           Clock.sleep(pollInterval.toMillis)
           // Refresh application state
-          val sparkPods = kubernetesClient.getSparkPodsByAppId(appId)
-          val driverPodOption = sparkPods.find(_.getMetadata.getLabels.get(KUBERNETES_SPARK_ROLE_LABEL) == KUBERNETES_SPARK_ROLE_DRIVER)
+          val sparkPods = kubernetesClient.getSparkPodsByAppTag(appTag)
+          val driverPodOption = sparkPods.find(isSparkDriver)
           kubernetesDiagnostics = sparkPods
-            .sortBy(pod ⇒ pod.getMetadata.getName)
+            .sortBy(_.getMetadata.getName)
             .map(buildSparkPodDiagnosticsPrettyString)
             .flatMap(_.split("\n"))
             .toIndexedSeq
           changeState(mapKubernetesState(Try(driverPodOption.get.getStatus).toOption))
           // Refresh app log cache
-          kubernetesAppLog = Try({
-            val driverPod = driverPodOption.get
-            val name = driverPod.getMetadata.getName
-            val namespace = driverPod.getMetadata.getNamespace
-            kubernetesClient
-              .pods.inNamespace(namespace).withName(name)
-              .tailingLines(cacheLogSize).getLog.split("\n").toIndexedSeq
-          }).getOrElse(IndexedSeq("No log..."))
+          kubernetesAppLog = kubernetesClient.getPodLog(driverPodOption.get, cacheLogSize)
           val latestAppInfo = {
             val historyServerOption = Option(livyConf.get(LivyConf.HISTORY_SERVER_URL))
             val historyServerInfo = if (historyServerOption.isDefined) Option(s"${historyServerOption.get}/history/$appId/jobs/") else None
@@ -283,7 +252,7 @@ class SparkKubernetesApp private[utils](
       case _: InterruptedException =>
         kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
         changeState(SparkApp.State.KILLED)
-      case e: Throwable =>
+      case e: Throwable            =>
         error(s"Error whiling refreshing Kubernetes state: $e")
         kubernetesDiagnostics = ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
         changeState(SparkApp.State.FAILED)
@@ -321,50 +290,63 @@ class SparkKubernetesApp private[utils](
 }
 
 object KubernetesExtensions {
+
   import KubernetesConstants._
 
   implicit class KubernetesClientExtensions(client: KubernetesClient) {
     def selectSparkDrivers(sparkRoleLabel: String = KUBERNETES_SPARK_ROLE_LABEL, sparkRoleDriver: String = KUBERNETES_SPARK_ROLE_DRIVER): FilterWatchListDeletable[Pod, PodList, lang.Boolean, Watch, Watcher[Pod]] =
-      client.pods().inAnyNamespace().withLabel(sparkRoleLabel, sparkRoleDriver)
-
-    def getSparkDrivers(sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL, sparkAppTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): mutable.Buffer[Pod] =
-      selectSparkDrivers().withLabel(sparkAppIdLabel).withLabel(sparkAppTagLabel).list().getItems.asScala
+      client.pods.inAnyNamespace.withLabel(sparkRoleLabel, sparkRoleDriver)
 
     def getSparkDriverByAppId(appId: String, appIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): Option[Pod] =
-      Try(selectSparkDrivers().withLabel(appIdLabel, appId).list().getItems.asScala.head).toOption
+      Try(selectSparkDrivers().withLabel(appIdLabel, appId).list.getItems.asScala.head).toOption
 
     def getSparkDriverByAppTag(appTag: String, appTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): Option[Pod] =
-      Try(selectSparkDrivers().withLabel(appTagLabel, appTag).list().getItems.asScala.head).toOption
+      Try(selectSparkDrivers().withLabel(appTagLabel, appTag).list.getItems.asScala.head).toOption
 
     def getSparkPodsByAppId(appId: String, sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): mutable.Buffer[Pod] =
-      client.pods().inAnyNamespace().withLabel(KUBERNETES_SPARK_APP_ID_LABEL, appId).list().getItems.asScala
+      client.pods.inAnyNamespace.withLabel(sparkAppIdLabel, appId).list().getItems.asScala
 
-    def createNamespace(name: String): Namespace = client.namespaces().create(
-      new NamespaceBuilder().withNewMetadata().withName(name).endMetadata().build()
-    )
+    def getSparkPodsByAppTag(appTag: String, sparkAppTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): mutable.Buffer[Pod] =
+      client.pods.inAnyNamespace.withLabel(sparkAppTagLabel, appTag).list().getItems.asScala
 
-    def createImagePullSecret(namespace: String, name: String, secret: String): Secret = client.secrets().create(
-      new SecretBuilder().withNewMetadata().withName(name).withNamespace(namespace).endMetadata()
-        .withType(KUBERNETES_IMAGE_PULL_SECRET_TYPE)
-        .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, secret)
-        .build()
-    )
+    def getNamespacesWithPrefix(prefix: String): mutable.Buffer[Namespace] =
+      client.namespaces().list().getItems.asScala.filter(_.getMetadata.getName.startsWith(prefix))
+
+    def createNamespace(name: String): Namespace = client.namespaces.create(buildNamespace(name))
+
+    def deleteNamespace(name: String): Boolean = client.namespaces.delete(buildNamespace(name))
+
+    def buildNamespace(name: String): Namespace = new NamespaceBuilder().withNewMetadata.withName(name).endMetadata.build()
+
+    def createImagePullSecret(namespace: String, name: String, secret: String): Secret = client.secrets.createNew
+      .withNewMetadata().withName(name).withNamespace(namespace).endMetadata
+      .withType(KUBERNETES_IMAGE_PULL_SECRET_TYPE)
+      .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, secret)
+      .done()
+
+    def getPodLog(pod: Pod, cacheLogSize: Int): IndexedSeq[String] = Try({
+      val name = pod.getMetadata.getName
+      val namespace = pod.getMetadata.getNamespace
+      client.pods.inNamespace(namespace).withName(name)
+        .tailingLines(cacheLogSize).getLog.split("\n").toIndexedSeq
+    }).getOrElse(IndexedSeq("No log..."))
   }
 
 }
 
 object KubernetesConstants {
-  val KUBERNETES_SPARK_APP_ID_LABEL = "spark-app-selector"
+  val KUBERNETES_SPARK_APP_ID_LABEL  = "spark-app-selector"
   val KUBERNETES_SPARK_APP_TAG_LABEL = "spark-app-tag"
-  val KUBERNETES_SPARK_ROLE_LABEL = "spark-role"
-  val KUBERNETES_SPARK_ROLE_DRIVER = "driver"
+  val KUBERNETES_SPARK_ROLE_LABEL    = "spark-role"
+  val KUBERNETES_SPARK_ROLE_DRIVER   = "driver"
 
-  val KUBERNETES_IMAGE_PULL_SECRET_TYPE = "kubernetes.io/dockerconfigjson"
+  val KUBERNETES_IMAGE_PULL_SECRET_TYPE     = "kubernetes.io/dockerconfigjson"
   val KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY = ".dockerconfigjson"
 }
 
 object KubernetesUtils {
 
+  import KubernetesConstants._
   import org.apache.livy.server.batch.CreateBatchRequest
 
   def formatAppId(appId: String): String = {
@@ -385,22 +367,39 @@ object KubernetesUtils {
     }
   }
 
-  def prepareKubernetesNamespace(livyConf: LivyConf, appTag: String): Unit = {
+  def prepareKubernetesNamespace(livyConf: LivyConf, namespace: String): Unit = {
     import KubernetesExtensions._
     import SparkKubernetesApp.kubernetesClient
 
-    kubernetesClient.createNamespace(appTag)
+    kubernetesClient.createNamespace(namespace)
     val imagePullSecretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME)
     val imagePullSecretContent = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_CONTENT)
     if (imagePullSecretName != null && imagePullSecretName.nonEmpty &&
       imagePullSecretContent != null && imagePullSecretContent.nonEmpty) {
-      kubernetesClient.createImagePullSecret(appTag, imagePullSecretName, imagePullSecretContent)
+      kubernetesClient.inAnyNamespace.createImagePullSecret(namespace, imagePullSecretName, imagePullSecretContent)
     }
   }
 
-  def prepareKubernetesSpecificConf(request: CreateBatchRequest, appTag: String): Map[String, String] = Map(
+  def prepareKubernetesSpecificConf(request: CreateBatchRequest, namespace: String): Map[String, String] = Map(
     "spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
-    "spark.kubernetes.namespace" → appTag
+    "spark.kubernetes.namespace" → namespace
   )
+
+  def parseCreationTime(resource: HasMetadata): DateTime =
+    org.joda.time.DateTime.parse(resource.getMetadata.getCreationTimestamp.getTime).withZone(DateTimeZone.UTC)
+
+  def isExpired(resource: HasMetadata, ttl: FiniteDuration): Boolean =
+    parseCreationTime(resource).plus(ttl.toMillis).isBefore(DateTime.now(DateTimeZone.UTC))
+
+  def isSparkDriver(pod: Pod): Boolean = {
+    pod.getMetadata.getLabels.containsKey(KUBERNETES_SPARK_ROLE_LABEL) &&
+      pod.getMetadata.getLabels.get(KUBERNETES_SPARK_ROLE_LABEL) == KUBERNETES_SPARK_ROLE_DRIVER
+  }
+
+  def isSparkDriverExpired(driver: Pod, ttl: FiniteDuration): Boolean =
+    isExpired(driver, ttl) && isSparkDriverFinished(driver.getStatus.getPhase)
+
+  def isSparkDriverFinished(phase: String): Boolean =
+    Try(Seq("error", "completed").contains(phase.toLowerCase) || phase.toLowerCase.contains("backoff")).getOrElse(false)
 
 }

@@ -156,6 +156,8 @@ object LivyConf {
   val KUBERNETES_IMAGE_PULL_SECRET_NAME = Entry("livy.server.kubernetes.imagePullSercret.name", "")
   val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSercret.content", "")
 
+  val KUBERNETES_SPARK_NAMESPACE_PREFIX = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
+
 
 
 
