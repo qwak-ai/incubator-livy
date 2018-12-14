@@ -80,7 +80,7 @@ object SparkApp {
         SPARK_YARN_TAG_KEY -> mergedYarnTags,
         "spark.yarn.submit.waitAppCompletion" -> "false")
     } else if (livyConf.isRunningOnKubernetes()) {
-      import KubernetesConfig._
+      import KubernetesConstants._
       sparkConf ++ Map(
         s"spark.kubernetes.driver.label.$KUBERNETES_SPARK_APP_TAG_LABEL" → uniqueAppTag,
         s"spark.kubernetes.executor.label.$KUBERNETES_SPARK_APP_TAG_LABEL" → uniqueAppTag

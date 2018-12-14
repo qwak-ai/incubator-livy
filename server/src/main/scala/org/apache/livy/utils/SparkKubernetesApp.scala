@@ -17,14 +17,14 @@
 package org.apache.livy.utils
 
 import java.lang
+import java.util.UUID
 import java.util.concurrent.TimeoutException
 
-import io.fabric8.kubernetes.api.model.{HasMetadata, Pod, PodList, PodStatus}
+import io.fabric8.kubernetes.api.model.{ConfigBuilder => _, _}
 import io.fabric8.kubernetes.client._
 import io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable
-import org.apache.livy.{LivyConf, Logging, Utils}
+import org.apache.livy.LivyConf
 
-import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -35,7 +35,7 @@ import scala.util.Try
 
 object SparkKubernetesApp extends Logging {
 
-  import KubernetesConfig._
+  import KubernetesConstants._
 
   def init(livyConf: LivyConf): Unit = {
     cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
@@ -54,7 +54,7 @@ object SparkKubernetesApp extends Logging {
   }
 
   private var gcCheckTimeout: Long = _
-  private var gcTtl         : Long = _
+  private var gcTtl: Long = _
 
   private val outdatedAppTags = new java.util.concurrent.ConcurrentHashMap[String, Long]()
 
@@ -126,39 +126,29 @@ object SparkKubernetesApp extends Logging {
   }
 }
 
-/**
-  * Provide a class to control a Spark application using Kubernetes API.
-  *
-  * @param appTag      An app tag that can unique identify the Spark Kubernetes app.
-  * @param appIdOption The appId of the Spark Kubernetes app. If this's None, Spark Kubernetes App will find it
-  *                    using appTag.
-  * @param process     The spark-submit process launched the Spark Kubernetes application. This is optional.
-  *                    If it's provided, Spark Kubernetes log() will include its log.
-  * @param listener    Optional listener for notification of appId discovery and app state changes.
-  */
 class SparkKubernetesApp private[utils](
-    appTag: String,
-    appIdOption: Option[String],
-    process: Option[LineBufferedProcess],
-    listener: Option[SparkAppListener],
-    livyConf: LivyConf,
-    kubernetesClient: => KubernetesClient = SparkKubernetesApp.kubernetesClient) // For unit test. TODO ???
+                                         appTag: String,
+                                         appIdOption: Option[String],
+                                         process: Option[LineBufferedProcess],
+                                         listener: Option[SparkAppListener],
+                                         livyConf: LivyConf,
+                                         kubernetesClient: => KubernetesClient = SparkKubernetesApp.kubernetesClient) // For unit test. TODO ???
   extends SparkApp
     with Logging {
 
-  import KubernetesConfig._
+  import KubernetesConstants._
   import SparkKubernetesApp._
 
-  private        val appIdPromise         : Promise[String]    = Promise()
-  private[utils] var state                : SparkApp.State     = SparkApp.State.STARTING
-  private        var kubernetesDiagnostics: IndexedSeq[String] = IndexedSeq.empty[String]
-  private        var kubernetesAppLog     : IndexedSeq[String] = IndexedSeq.empty[String]
+  private val appIdPromise: Promise[String] = Promise()
+  private[utils] var state: SparkApp.State = SparkApp.State.STARTING
+  private var kubernetesDiagnostics: IndexedSeq[String] = IndexedSeq.empty[String]
+  private var kubernetesAppLog: IndexedSeq[String] = IndexedSeq.empty[String]
 
   // TODO ???
   override def log(): IndexedSeq[String] =
-    ("stdout: " +: kubernetesAppLog) ++
-      ("\nstderr: " +: (process.map(_.inputLines).getOrElse(ArrayBuffer.empty[String]) ++ process.map(_.errorLines).getOrElse(ArrayBuffer.empty[String]))) ++
-      ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
+  ("stdout: " +: kubernetesAppLog) ++
+    ("\nstderr: " +: (process.map(_.inputLines).getOrElse(ArrayBuffer.empty[String]) ++ process.map(_.errorLines).getOrElse(ArrayBuffer.empty[String]))) ++
+    ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
 
   override def kill(): Unit = synchronized {
     if (isRunning) {
@@ -187,20 +177,10 @@ class SparkKubernetesApp private[utils](
     }
   }
 
-  /**
-    * Find the corresponding YARN application id from an application tag.
-    *
-    * @param appTag The application tag tagged on the target application.
-    *               If the tag is not unique, it returns the first application it found.
-    *               It will be converted to lower case to match YARN's behaviour.
-    *
-    * @return ApplicationId or the failure.
-    */
-  @tailrec
   private def getAppIdFromTag(
-      appTag: String,
-      pollInterval: Duration,
-      deadline: Deadline): Option[String] = {
+                               appTag: String,
+                               pollInterval: Duration,
+                               deadline: Deadline): Option[String] = {
     val driver = kubernetesClient.getSparkDriverByAppTag(appTag)
     if (driver.isDefined) {
       Option(driver.get.getMetadata.getLabels.get(KUBERNETES_SPARK_APP_ID_LABEL))
@@ -228,10 +208,10 @@ class SparkKubernetesApp private[utils](
     val state = Try(kubernetesPodStatus.get.getPhase.toLowerCase).getOrElse("error")
     state match {
       case "pending" | "containercreating" => SparkApp.State.STARTING
-      case "running"                       => SparkApp.State.RUNNING
-      case "completed"                     => SparkApp.State.FINISHED
-      case "failed" | "error"              => SparkApp.State.FAILED
-      case _                               => SparkApp.State.KILLED
+      case "running" => SparkApp.State.RUNNING
+      case "completed" => SparkApp.State.FINISHED
+      case "failed" | "error" => SparkApp.State.FAILED
+      case _ => SparkApp.State.KILLED
     }
   }
 
@@ -303,31 +283,18 @@ class SparkKubernetesApp private[utils](
       case _: InterruptedException =>
         kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
         changeState(SparkApp.State.KILLED)
-      case e: Throwable            =>
+      case e: Throwable =>
         error(s"Error whiling refreshing Kubernetes state: $e")
         kubernetesDiagnostics = ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
         changeState(SparkApp.State.FAILED)
     }
   }
 
-  implicit class KubernetesClientExtensions(client: KubernetesClient) {
-    def selectSparkDrivers(sparkRoleLabel: String = KUBERNETES_SPARK_ROLE_LABEL, sparkRoleDriver: String = KUBERNETES_SPARK_ROLE_DRIVER): FilterWatchListDeletable[Pod, PodList, lang.Boolean, Watch, Watcher[Pod]] =
-      client.pods().inAnyNamespace().withLabel(sparkRoleLabel, sparkRoleDriver)
-
-    def getSparkDrivers(sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL, sparkAppTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): mutable.Buffer[Pod] =
-      selectSparkDrivers().withLabel(sparkAppIdLabel).withLabel(sparkAppTagLabel).list().getItems.asScala
-
-    def getSparkDriverByAppId(appId: String, appIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): Option[Pod] =
-      Try(selectSparkDrivers().withLabel(appIdLabel, appId).list().getItems.asScala.head).toOption
-
-    def getSparkDriverByAppTag(appTag: String, appTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): Option[Pod] =
-      Try(selectSparkDrivers().withLabel(appTagLabel, appTag).list().getItems.asScala.head).toOption
-
-    def getSparkPodsByAppId(appId: String, sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): mutable.Buffer[Pod] =
-      client.pods().inAnyNamespace().withLabel(KUBERNETES_SPARK_APP_ID_LABEL, appId).list().getItems.asScala
-  }
-
   def buildSparkPodDiagnosticsPrettyString(pod: Pod): String = {
+    def printMap(map: mutable.Map[_, _]): String = map.map {
+      case (key, value) ⇒ s"$key=$value"
+    }.mkString(", ")
+
     s"${pod.getMetadata.getName}.${pod.getMetadata.getNamespace}:" +
       s"\n\tnode: ${pod.getSpec.getNodeName}" +
       s"\n\thostname: ${pod.getSpec.getHostname}" +
@@ -351,15 +318,89 @@ class SparkKubernetesApp private[utils](
       s"\n\t\t${pod.getStatus.getConditions.asScala.mkString("\n\t\t")}"
   }
 
-  def printMap(map: mutable.Map[_, _]): String = map.map {
-    case (key, value) ⇒ s"$key=$value"
-  }.mkString(", ")
+}
+
+object KubernetesExtensions {
+  import KubernetesConstants._
+
+  implicit class KubernetesClientExtensions(client: KubernetesClient) {
+    def selectSparkDrivers(sparkRoleLabel: String = KUBERNETES_SPARK_ROLE_LABEL, sparkRoleDriver: String = KUBERNETES_SPARK_ROLE_DRIVER): FilterWatchListDeletable[Pod, PodList, lang.Boolean, Watch, Watcher[Pod]] =
+      client.pods().inAnyNamespace().withLabel(sparkRoleLabel, sparkRoleDriver)
+
+    def getSparkDrivers(sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL, sparkAppTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): mutable.Buffer[Pod] =
+      selectSparkDrivers().withLabel(sparkAppIdLabel).withLabel(sparkAppTagLabel).list().getItems.asScala
+
+    def getSparkDriverByAppId(appId: String, appIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): Option[Pod] =
+      Try(selectSparkDrivers().withLabel(appIdLabel, appId).list().getItems.asScala.head).toOption
+
+    def getSparkDriverByAppTag(appTag: String, appTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): Option[Pod] =
+      Try(selectSparkDrivers().withLabel(appTagLabel, appTag).list().getItems.asScala.head).toOption
+
+    def getSparkPodsByAppId(appId: String, sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): mutable.Buffer[Pod] =
+      client.pods().inAnyNamespace().withLabel(KUBERNETES_SPARK_APP_ID_LABEL, appId).list().getItems.asScala
+
+    def createNamespace(name: String): Namespace = client.namespaces().create(
+      new NamespaceBuilder().withNewMetadata().withName(name).endMetadata().build()
+    )
+
+    def createImagePullSecret(namespace: String, name: String, secret: String): Secret = client.secrets().create(
+      new SecretBuilder().withNewMetadata().withName(name).withNamespace(namespace).endMetadata()
+        .withType(KUBERNETES_IMAGE_PULL_SECRET_TYPE)
+        .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, secret)
+        .build()
+    )
+  }
 
 }
 
-object KubernetesConfig {
-  val KUBERNETES_SPARK_APP_ID_LABEL  = "spark-app-selector"
+object KubernetesConstants {
+  val KUBERNETES_SPARK_APP_ID_LABEL = "spark-app-selector"
   val KUBERNETES_SPARK_APP_TAG_LABEL = "spark-app-tag"
-  val KUBERNETES_SPARK_ROLE_LABEL    = "spark-role"
-  val KUBERNETES_SPARK_ROLE_DRIVER   = "driver"
+  val KUBERNETES_SPARK_ROLE_LABEL = "spark-role"
+  val KUBERNETES_SPARK_ROLE_DRIVER = "driver"
+
+  val KUBERNETES_IMAGE_PULL_SECRET_TYPE = "kubernetes.io/dockerconfigjson"
+  val KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY = ".dockerconfigjson"
+}
+
+object KubernetesUtils {
+
+  import org.apache.livy.server.batch.CreateBatchRequest
+
+  def formatAppId(appId: String): String = {
+    val formatted = s"stub.$appId".split("\\.").last.toLowerCase().replaceAll("[^0-9a-z]", "")
+    val shortened = if (formatted.length > 32) formatted.substring(0, 32) else formatted
+    s"$shortened-${System.currentTimeMillis()}"
+  }
+
+  def getAppId(appId: Option[String], appName: Option[String], className: Option[String]): String = {
+    if (appId.isDefined) {
+      appId.get
+    } else if (appName.isDefined) {
+      formatAppId(appName.get)
+    } else if (className.isDefined) {
+      formatAppId(className.get)
+    } else {
+      s"spark-${UUID.randomUUID().toString.replaceAll("-", "")}"
+    }
+  }
+
+  def prepareKubernetesNamespace(livyConf: LivyConf, appTag: String): Unit = {
+    import KubernetesExtensions._
+    import SparkKubernetesApp.kubernetesClient
+
+    kubernetesClient.createNamespace(appTag)
+    val imagePullSecretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME)
+    val imagePullSecretContent = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_CONTENT)
+    if (imagePullSecretName != null && imagePullSecretName.nonEmpty &&
+      imagePullSecretContent != null && imagePullSecretContent.nonEmpty) {
+      kubernetesClient.createImagePullSecret(appTag, imagePullSecretName, imagePullSecretContent)
+    }
+  }
+
+  def prepareKubernetesSpecificConf(request: CreateBatchRequest, appTag: String): Map[String, String] = Map(
+    "spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
+    "spark.kubernetes.namespace" → appTag
+  )
+
 }

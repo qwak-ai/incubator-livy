@@ -147,8 +147,17 @@ object LivyConf {
   // Kubernetes configs
   val KUBERNETES_APP_LOOKUP_TIMEOUT = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
   val KUBERNETES_POLL_INTERVAL = Entry("livy.server.kubernetes.poll-interval", "5s")
+
+  val KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE = Entry("livy.server.kubernetes.experimental.enable", "false")
+
   val KUBERNETES_GC_CHECK_TIMEOUT = Entry("livy.server.kubernetes.gc.check-interval", "1h")
   val KUBERNETES_GC_TTL = Entry("livy.server.kubernetes.gc.ttl", "24h")
+
+  val KUBERNETES_IMAGE_PULL_SECRET_NAME = Entry("livy.server.kubernetes.imagePullSercret.name", "")
+  val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSercret.content", "")
+
+
+
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"
@@ -259,7 +268,10 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
   def isRunningOnYarn(): Boolean = sparkMaster().startsWith("yarn")
 
   /** Return true if spark master contains k8s. */
-  def isRunningOnKubernetes(): Boolean = sparkMaster().contains("k8s")
+  def isRunningOnKubernetes(experimentalFetures: Boolean = false): Boolean = sparkMaster().contains("k8s") && {
+    if (experimentalFetures) getBoolean(KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE) else true
+  }
+
 
   /** Return the spark deploy mode Livy sessions should use. */
   def sparkDeployMode(): Option[String] = Option(get(LIVY_SPARK_DEPLOY_MODE)).filterNot(_.isEmpty)

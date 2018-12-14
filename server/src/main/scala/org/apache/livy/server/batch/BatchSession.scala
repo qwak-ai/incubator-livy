@@ -61,42 +61,10 @@ object BatchSession extends Logging {
       mockApp: Option[SparkApp] = None): BatchSession = {
     val appTag = s"livy-batch-$id-${Random.alphanumeric.take(8).mkString}"
 
-    def getAppId(appId: Option[String], appName: Option[String], className: Option[String]): String = {
-      def formatAppId(appId: String): String = {
-        val formatted = s"stub.$appId".split("\\.").last.toLowerCase().replaceAll("""[\p{Punct}\p{Space}]""", "")
-        val shortened = if (formatted.length > 32) formatted.substring(0, 32) else formatted
-        s"$shortened-${System.currentTimeMillis()}"
-      }
-      if (appId.isDefined) {
-        appId.get
-      } else if (appName.isDefined) {
-        formatAppId(appName.get)
-      } else if (className.isDefined) {
-        formatAppId(className.get)
-      } else {
-        s"spark-${UUID.randomUUID().toString.replaceAll("-", "")}"
-      }
-    }
-
     def createSparkApp(s: BatchSession): SparkApp = {
-      val customConf = if (livyConf.isRunningOnKubernetes()) {
-        val client = SparkKubernetesApp.kubernetesClient
-        client.namespaces().create(
-            new NamespaceBuilder()
-              .withNewMetadata().withName(appTag).endMetadata()
-              .build()
-          )
-        client.secrets().create(
-          new SecretBuilder()
-            .withNewMetadata().withName("rsegdev-acr-secret").withNamespace(appTag).endMetadata()
-            .withType("kubernetes.io/dockerconfigjson")
-            .addToData(".dockerconfigjson", "eyJhdXRocyI6eyJyc2VnZGV2LmF6dXJlY3IuaW8iOnsiYXV0aCI6ImNuTmxaMlJsZGpweU4zSlNhVTgzWTA1aVVFZzRUMnc0YzFGM1FsTTNVV0k1SzJoek5FNDRWUT09In19fQ==")
-            .build()
-        )
-        Map(
-          "spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
-          "spark.kubernetes.namespace" → appTag
-        )
+      val masterSpecificConf = if (livyConf.isRunningOnKubernetes(true)) {
+        KubernetesUtils.prepareKubernetesNamespace(livyConf, appTag)
+        KubernetesUtils.prepareKubernetesSpecificConf(request, appTag)
       } else {
         Map()
       }
@@ -104,7 +72,7 @@ object BatchSession extends Logging {
         appTag,
         livyConf,
         prepareConf(
-          request.conf ++ customConf, request.jars, request.files, request.archives, request.pyFiles, livyConf))
+          request.conf ++ masterSpecificConf, request.jars, request.files, request.archives, request.pyFiles, livyConf))
       require(request.file != null, "File is required.")
 
       val builder = new SparkProcessBuilder(livyConf)
