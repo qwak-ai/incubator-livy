@@ -146,20 +146,17 @@ object LivyConf {
 
   // Kubernetes configs
   val KUBERNETES_APP_LOOKUP_TIMEOUT = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
-  val KUBERNETES_POLL_INTERVAL = Entry("livy.server.kubernetes.poll-interval", "5s")
+  val KUBERNETES_POLL_INTERVAL = Entry("livy.server.kubernetes.poll-interval", "15s")
 
-  val KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE = Entry("livy.server.kubernetes.experimental.enable", "false")
+  val KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE = Entry("livy.server.kubernetes.experimental.enable", false)
 
-  val KUBERNETES_GC_CHECK_TIMEOUT = Entry("livy.server.kubernetes.gc.check-interval", "1h")
-  val KUBERNETES_GC_TTL = Entry("livy.server.kubernetes.gc.ttl", "24h")
+  val KUBERNETES_GC_CHECK_INTERVAL = Entry("livy.server.kubernetes.gc.check-interval", "1h")
+  val KUBERNETES_GC_TTL            = Entry("livy.server.kubernetes.gc.ttl", "24h")
 
-  val KUBERNETES_IMAGE_PULL_SECRET_NAME = Entry("livy.server.kubernetes.imagePullSercret.name", "")
-  val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSercret.content", "")
+  val KUBERNETES_IMAGE_PULL_SECRET_NAME = Entry("livy.server.kubernetes.imagePullSecret.name", "")
+  val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSecret.content", "")
 
   val KUBERNETES_SPARK_NAMESPACE_PREFIX = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
-
-
-
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"

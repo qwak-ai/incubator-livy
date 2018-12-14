@@ -59,12 +59,13 @@ object BatchSession extends Logging {
       proxyUser: Option[String],
       sessionStore: SessionStore,
       mockApp: Option[SparkApp] = None): BatchSession = {
-    val appTag = s"livy-batch-$id-${Random.alphanumeric.take(8).mkString}"
+    val appTag = s"livy-batch-$id-${Random.alphanumeric.take(8).mkString.toLowerCase}"
 
     def createSparkApp(s: BatchSession): SparkApp = {
       val masterSpecificConf = if (livyConf.isRunningOnKubernetes(true)) {
-        KubernetesUtils.prepareKubernetesNamespace(livyConf, appTag)
-        KubernetesUtils.prepareKubernetesSpecificConf(request, appTag)
+        val namespace = s"${livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX)}-$appTag"
+        KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace)
+        KubernetesUtils.prepareKubernetesSpecificConf(request, namespace)
       } else {
         Map()
       }

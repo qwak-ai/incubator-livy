@@ -43,8 +43,8 @@ object SparkKubernetesApp extends Logging {
     cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
     sparkNamespacePrefix = livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX)
     gcTtl = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_TTL).milliseconds
-    gcCheckTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_CHECK_TIMEOUT).milliseconds
-    logger.info(
+    gcCheckTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_CHECK_INTERVAL).milliseconds
+    info(
       s"Initialized SparkKubernetesApp: " +
         s"master=[${livyConf.sparkMaster()}] " +
         s"| gcTtl=[$gcTtl] " +
@@ -95,6 +95,7 @@ object SparkKubernetesApp extends Logging {
                 .filter(isSparkDriver)
                 .forall(isSparkDriverExpired(_, gcTtl))
               )
+
         if (sparkNamespacesToDelete.nonEmpty) {
           info(s"GC outdated apps: ${sparkNamespacesToDelete.map(_.getMetadata.getName).mkString(", ")}")
           kubernetesClient.namespaces.delete(sparkNamespacesToDelete: _*)
@@ -137,7 +138,7 @@ class SparkKubernetesApp private[utils](
     if (isRunning) {
       try {
         // TODO flush log and collect all the diagnostics information
-        kubernetesClient.deleteNamespace(appTag)
+        kubernetesClient.deleteNamespace(s"$sparkNamespacePrefix-$appTag}")
       } catch {
         // TODO analyse possible exceptions and handle them
         case _: TimeoutException | _: InterruptedException =>
@@ -297,14 +298,8 @@ object KubernetesExtensions {
     def selectSparkDrivers(sparkRoleLabel: String = KUBERNETES_SPARK_ROLE_LABEL, sparkRoleDriver: String = KUBERNETES_SPARK_ROLE_DRIVER): FilterWatchListDeletable[Pod, PodList, lang.Boolean, Watch, Watcher[Pod]] =
       client.pods.inAnyNamespace.withLabel(sparkRoleLabel, sparkRoleDriver)
 
-    def getSparkDriverByAppId(appId: String, appIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): Option[Pod] =
-      Try(selectSparkDrivers().withLabel(appIdLabel, appId).list.getItems.asScala.head).toOption
-
     def getSparkDriverByAppTag(appTag: String, appTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): Option[Pod] =
       Try(selectSparkDrivers().withLabel(appTagLabel, appTag).list.getItems.asScala.head).toOption
-
-    def getSparkPodsByAppId(appId: String, sparkAppIdLabel: String = KUBERNETES_SPARK_APP_ID_LABEL): mutable.Buffer[Pod] =
-      client.pods.inAnyNamespace.withLabel(sparkAppIdLabel, appId).list().getItems.asScala
 
     def getSparkPodsByAppTag(appTag: String, sparkAppTagLabel: String = KUBERNETES_SPARK_APP_TAG_LABEL): mutable.Buffer[Pod] =
       client.pods.inAnyNamespace.withLabel(sparkAppTagLabel, appTag).list().getItems.asScala
@@ -344,7 +339,7 @@ object KubernetesConstants {
   val KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY = ".dockerconfigjson"
 }
 
-object KubernetesUtils {
+object KubernetesUtils extends Logging {
 
   import KubernetesConstants._
   import org.apache.livy.server.batch.CreateBatchRequest
@@ -400,6 +395,6 @@ object KubernetesUtils {
     isExpired(driver, ttl) && isSparkDriverFinished(driver.getStatus.getPhase)
 
   def isSparkDriverFinished(phase: String): Boolean =
-    Try(Seq("error", "completed").contains(phase.toLowerCase) || phase.toLowerCase.contains("backoff")).getOrElse(false)
+    Try(Seq("succeeded", "failed").contains(phase.toLowerCase) || phase.toLowerCase.contains("backoff")).getOrElse(false)
 
 }
