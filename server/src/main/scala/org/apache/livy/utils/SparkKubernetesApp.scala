@@ -36,29 +36,7 @@ import scala.util.Try
 
 object SparkKubernetesApp extends Logging {
 
-  import KubernetesExtensions._
-  import KubernetesUtils._
-
-  def init(livyConf: LivyConf): Unit = {
-    cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
-    sparkNamespacePrefix = livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX)
-    gcTtl = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_TTL).milliseconds
-    gcCheckTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_GC_CHECK_INTERVAL).milliseconds
-    info(
-      s"Initialized SparkKubernetesApp: " +
-        s"master=[${livyConf.sparkMaster()}] " +
-        s"| gcTtl=[$gcTtl] " +
-        s"| gcCheckInterval=[$gcCheckTimeout]"
-    )
-//    kubernetesNamespaceGcThread.setDaemon(true)
-//    kubernetesNamespaceGcThread.setName("kubernetesGcThread")
-//    kubernetesNamespaceGcThread.start()
-  }
-
-  private var cacheLogSize        : Int            = _
-  private var sparkNamespacePrefix: String         = _
-  private var gcTtl               : FiniteDuration = _
-  private var gcCheckTimeout      : FiniteDuration = _
+  private var cacheLogSize: Int = _
 
   // KubernetesClient is thread safe. Create once, share it across threads.
   lazy val kubernetesClient: DefaultKubernetesClient = {
@@ -72,38 +50,17 @@ object SparkKubernetesApp extends Logging {
     new DefaultKubernetesClient(config)
   }
 
+  def init(livyConf: LivyConf): Unit = {
+    cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
+    info(s"Initialized SparkKubernetesApp: master=[${livyConf.sparkMaster()}]")
+  }
+
   private def getKubernetesTagToAppIdTimeout(livyConf: LivyConf): FiniteDuration =
     livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT).milliseconds
 
   private def getKubernetesPollInterval(livyConf: LivyConf): FiniteDuration =
     livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL).milliseconds
 
-  private val kubernetesNamespaceGcThread = new Thread() {
-    override def run(): Unit = {
-      while (true) {
-        val sparkNamespaces = kubernetesClient.getNamespacesWithPrefix(sparkNamespacePrefix)
-
-        val sparkNamespacesWithoutDrivers = sparkNamespaces.filterNot(ns ⇒
-          kubernetesClient.pods.inNamespace(ns.getMetadata.getName).list.getItems.asScala.exists(isSparkDriver)
-        )
-        val sparkNamespacesWithDrivers = sparkNamespaces -- sparkNamespacesWithoutDrivers
-
-        val sparkNamespacesToDelete =
-          sparkNamespacesWithoutDrivers.filter(isExpired(_, gcTtl)) ++
-            sparkNamespacesWithDrivers
-              .filter(ns ⇒ kubernetesClient.pods.inNamespace(ns.getMetadata.getName).list.getItems.asScala
-                .filter(isSparkDriver)
-                .forall(isSparkDriverExpired(_, gcTtl))
-              )
-
-        if (sparkNamespacesToDelete.nonEmpty) {
-          info(s"GC outdated apps: ${sparkNamespacesToDelete.map(_.getMetadata.getName).mkString(", ")}")
-          kubernetesClient.namespaces.delete(sparkNamespacesToDelete: _*)
-        }
-        Clock.sleep(gcCheckTimeout.toMillis)
-      }
-    }
-  }
 }
 
 class SparkKubernetesApp private[utils](
@@ -122,13 +79,15 @@ class SparkKubernetesApp private[utils](
   import SparkApp.State._
   import SparkKubernetesApp._
 
-  private        var namespace            : String           = _
-  private        val appIdPromise         : Promise[String]           = Promise()
-  private        val namespacePromise     : Promise[String]           = Promise()
-  private[utils] var state                : SparkApp.State            = SparkApp.State.STARTING
-  private        val runningStates        : Seq[SparkApp.State.Value] = Seq(STARTING, RUNNING)
-  private        var kubernetesDiagnostics: IndexedSeq[String]        = IndexedSeq.empty[String]
-  private        var kubernetesAppLog     : IndexedSeq[String]        = IndexedSeq.empty[String]
+  private var namespace       : String          = _
+  private val appIdPromise    : Promise[String] = Promise()
+  private val namespacePromise: Promise[String] = Promise()
+
+  private[utils] var state        : SparkApp.State            = SparkApp.State.STARTING
+  private        val runningStates: Seq[SparkApp.State.Value] = Seq(STARTING, RUNNING)
+
+  private var kubernetesDiagnostics: IndexedSeq[String] = IndexedSeq.empty[String]
+  private var kubernetesAppLog     : IndexedSeq[String] = IndexedSeq.empty[String]
 
   // TODO cache log $logSize, watch and persist full log
   override def log(): IndexedSeq[String] =
@@ -143,7 +102,6 @@ class SparkKubernetesApp private[utils](
         kubernetesAppMonitorThread.join(getKubernetesPollInterval(livyConf).toMillis * 2) // wait appMonitoring to finish
         // TODO wait for logWatchMonitoringThread to finish (and others)
         kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
-        kubernetesClient.deleteNamespace(namespace)
       } catch {
         // TODO analyse possible exceptions and handle them
         case _: TimeoutException | _: InterruptedException =>
@@ -152,6 +110,7 @@ class SparkKubernetesApp private[utils](
         // interrupt other threads of this app
       } finally {
         process.foreach(_.destroy())
+        info(s"Spark on Kubernetes app namespace [ $namespace ] was deleted: [ ${kubernetesClient.deleteNamespace(namespace)} ]")
         // TODO check the finalization of app data persistence
       }
     }
@@ -370,12 +329,15 @@ object KubernetesExtensions {
       .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, secret)
       .done()
 
-    def getPodLog(pod: Pod, cacheLogSize: Int): IndexedSeq[String] = Try({
+    def getPodLog(pod: Pod, cacheLogSize: Int): IndexedSeq[String] = try {
       val name = pod.getMetadata.getName
       val namespace = pod.getMetadata.getNamespace
       client.pods.inNamespace(namespace).withName(name)
         .tailingLines(cacheLogSize).getLog.split("\n").toIndexedSeq
-    }).getOrElse(IndexedSeq("No log..."))
+    } catch {
+      case e: Throwable ⇒
+        ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
+    }
   }
 
 }
