@@ -63,7 +63,7 @@ object BatchSession extends Logging {
 
     def createSparkApp(s: BatchSession): SparkApp = {
       val masterSpecificConf = if (livyConf.isRunningOnKubernetes(true)) {
-        val namespace = s"${livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX)}-$appTag"
+        val namespace = KubernetesUtils.generateKubernetesNamespace(appTag, livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX), request.conf)
         KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace)
         KubernetesUtils.prepareKubernetesSpecificConf(request, namespace)
       } else {

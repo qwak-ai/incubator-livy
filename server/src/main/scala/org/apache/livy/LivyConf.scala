@@ -267,8 +267,8 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
   def isRunningOnYarn(): Boolean = sparkMaster().startsWith("yarn")
 
   /** Return true if spark master contains k8s. */
-  def isRunningOnKubernetes(experimentalFetures: Boolean = false): Boolean = sparkMaster().contains("k8s") && {
-    if (experimentalFetures) getBoolean(KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE) else true
+  def isRunningOnKubernetes(experimentalFeatures: Boolean = false): Boolean = sparkMaster().contains("k8s") && {
+    if (experimentalFeatures) getBoolean(KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE) else true
   }
 
 

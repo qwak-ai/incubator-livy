@@ -119,6 +119,19 @@ abstract class SessionServlet[S <: Session, R <: RecoveryMetadata](
     }
   }
 
+  delete("/kill/:id") {
+    withModifyAccessSession { session =>
+      sessionManager.get(session.id) match {
+        case Some(s) =>
+          Await.ready(s.stop(), Duration.Inf)
+          Ok(Map("msg" -> "deleted"))
+
+        case None =>
+          NotFound(s"Session ${session.id} already stopped.")
+      }
+    }
+  }
+
   def tooManySessions(): Boolean = {
     val totalChildProceses = RSCClientFactory.childProcesses().get() +
       BatchSession.childProcesses.get()
