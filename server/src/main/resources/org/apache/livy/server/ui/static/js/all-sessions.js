@@ -58,7 +58,7 @@ function ajaxFunction(url, callback, httpMethod) {
 }
 
 function deleteConfirm(id) {
-    var url            = prependBasePath("/batches/" + id);
+    var url            = prependBasePath("/batches/kill/" + id);
     var httpMethod     = "DELETE";
     var deleteCallback = function() { alert("Batch [ " + id + " ] deleted!"); };
     this.ajaxFunction(url, deleteCallback, httpMethod);

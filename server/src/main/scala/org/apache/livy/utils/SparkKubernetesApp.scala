@@ -122,7 +122,9 @@ class SparkKubernetesApp private[utils](
   import SparkApp.State._
   import SparkKubernetesApp._
 
+  private        var namespace            : String           = _
   private        val appIdPromise         : Promise[String]           = Promise()
+  private        val namespacePromise     : Promise[String]           = Promise()
   private[utils] var state                : SparkApp.State            = SparkApp.State.STARTING
   private        val runningStates        : Seq[SparkApp.State.Value] = Seq(STARTING, RUNNING)
   private        var kubernetesDiagnostics: IndexedSeq[String]        = IndexedSeq.empty[String]
@@ -137,16 +139,20 @@ class SparkKubernetesApp private[utils](
   override def kill(): Unit = synchronized {
     if (isRunning) {
       try {
-        // TODO flush log and collect all the diagnostics information
-        kubernetesClient.deleteNamespace(s"$sparkNamespacePrefix-$appTag}")
+        changeState(SparkApp.State.KILLED)
+        kubernetesAppMonitorThread.join(getKubernetesPollInterval(livyConf).toMillis * 2) // wait appMonitoring to finish
+        // TODO wait for logWatchMonitoringThread to finish (and others)
+        kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
+        kubernetesClient.deleteNamespace(namespace)
       } catch {
         // TODO analyse possible exceptions and handle them
         case _: TimeoutException | _: InterruptedException =>
           warn("Deleting a session while its Kubernetes application is not found.")
           kubernetesAppMonitorThread.interrupt()
+        // interrupt other threads of this app
       } finally {
-        // TODO persist collected data
         process.foreach(_.destroy())
+        // TODO check the finalization of app data persistence
       }
     }
   }
@@ -178,6 +184,26 @@ class SparkKubernetesApp private[utils](
     }
   }
 
+  private def getNamespaceFromTag(
+      appTag: String,
+      pollInterval: Duration,
+      deadline: Deadline): String = {
+    val driver = kubernetesClient.getSparkDriverByAppTag(appTag)
+    if (driver.isDefined) {
+      driver.get.getMetadata.getNamespace
+    } else {
+      if (deadline.isOverdue) {
+        kill()
+        throw new Exception(s"No Kubernetes application is found with tag $appTag in " +
+          getKubernetesTagToAppIdTimeout(livyConf) / 1000 + " seconds. " +
+          "Please check your cluster status, it is may be very busy.")
+      } else {
+        Clock.sleep(pollInterval.toMillis)
+        getNamespaceFromTag(appTag, pollInterval, deadline)
+      }
+    }
+  }
+
   private def isRunning: Boolean = runningStates.contains(state)
 
   // Exposed for unit test.
@@ -192,42 +218,62 @@ class SparkKubernetesApp private[utils](
     }
   }
 
+  def findAppId: String = try {
+    appIdOption.getOrElse {
+      val pollInterval = getKubernetesPollInterval(livyConf)
+      val deadline = getKubernetesTagToAppIdTimeout(livyConf).fromNow
+      getAppIdFromTag(appTag, pollInterval, deadline).get
+    }
+  } catch {
+    case e: Exception =>
+      appIdPromise.failure(e)
+      throw e
+  }
+
+  def findNamespace(appTag: String): String = try {
+    val pollInterval = getKubernetesPollInterval(livyConf)
+    val deadline = getKubernetesTagToAppIdTimeout(livyConf).fromNow
+    getNamespaceFromTag(appTag, pollInterval, deadline)
+  } catch {
+    case e: Exception =>
+      namespacePromise.failure(e)
+      throw e
+  }
+
   // Exposed for unit test.
   // TODO Instead of spawning a thread for every session, create a centralized thread and
   // batch Kubernetes queries.
   private[utils] val kubernetesAppMonitorThread = Utils.startDaemonThread(s"kubernetesAppMonitorThread-$this") {
     try {
       // If appId is not known, query Kubernetes by appTag to get it.
-      val appId = try {
-        appIdOption.getOrElse {
-          val pollInterval = getKubernetesPollInterval(livyConf)
-          val deadline = getKubernetesTagToAppIdTimeout(livyConf).fromNow
-          getAppIdFromTag(appTag, pollInterval, deadline).get
-        }
-      } catch {
-        case e: Exception =>
-          appIdPromise.failure(e)
-          throw e
-      }
+      val appId = findAppId
       appIdPromise.success(appId)
+      namespace = findNamespace(appTag)
+      namespacePromise.success(namespace)
+
       Thread.currentThread().setName(s"kubernetesAppMonitorThread-$appId")
       listener.foreach(_.appIdKnown(appId.toString))
+
       val pollInterval = getKubernetesPollInterval(livyConf)
       var appInfo = AppInfo()
+
       while (isRunning) {
         try {
-          Clock.sleep(pollInterval.toMillis)
-          // Refresh application state
+
           val sparkPods = kubernetesClient.getSparkPodsByAppTag(appTag)
           val driverPodOption = sparkPods.find(isSparkDriver)
+
+          // Refresh application state
           kubernetesDiagnostics = sparkPods
             .sortBy(_.getMetadata.getName)
             .map(buildSparkPodDiagnosticsPrettyString)
             .flatMap(_.split("\n"))
             .toIndexedSeq
           changeState(mapKubernetesState(Try(driverPodOption.get.getStatus).toOption))
+
           // Refresh app log cache
           kubernetesAppLog = kubernetesClient.getPodLog(driverPodOption.get, cacheLogSize)
+          // Refresh AppInfo links
           val latestAppInfo = {
             val historyServerOption = Option(livyConf.get(LivyConf.HISTORY_SERVER_URL))
             val historyServerInfo = if (historyServerOption.isDefined) Option(s"${historyServerOption.get}/history/$appId/jobs/") else None
@@ -244,6 +290,7 @@ class SparkKubernetesApp private[utils](
             listener.foreach(_.infoChanged(latestAppInfo))
             appInfo = latestAppInfo
           }
+          Clock.sleep(pollInterval.toMillis)
         } catch {
           // This exception might be thrown during app is starting up. It's transient.
           case e: Throwable => throw e
@@ -257,6 +304,8 @@ class SparkKubernetesApp private[utils](
         error(s"Error whiling refreshing Kubernetes state: $e")
         kubernetesDiagnostics = ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
         changeState(SparkApp.State.FAILED)
+    } finally {
+      // TODO flush recovery data: AppInfo, LogCache, KubernetesDiagnostics ??
     }
   }
 
@@ -309,11 +358,13 @@ object KubernetesExtensions {
 
     def createNamespace(name: String): Namespace = client.namespaces.create(buildNamespace(name))
 
+    def containsNamespace(name: String): Boolean = client.namespaces.list.getItems.asScala.map(_.getMetadata.getName).contains(name)
+
     def deleteNamespace(name: String): Boolean = client.namespaces.delete(buildNamespace(name))
 
     def buildNamespace(name: String): Namespace = new NamespaceBuilder().withNewMetadata.withName(name).endMetadata.build()
 
-    def createImagePullSecret(namespace: String, name: String, secret: String): Secret = client.secrets.createNew
+    def createOrReplaceImagePullSecret(namespace: String, name: String, secret: String): Secret = client.secrets.createOrReplaceWithNew()
       .withNewMetadata().withName(name).withNamespace(namespace).endMetadata
       .withType(KUBERNETES_IMAGE_PULL_SECRET_TYPE)
       .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, secret)
@@ -362,16 +413,19 @@ object KubernetesUtils extends Logging {
     }
   }
 
+  def generateKubernetesNamespace(appTag: String, prefix: String, sparkConf: Map[String, String]): String = {
+    s"$prefix-${sparkConf.getOrElse("spark.kubernetes.namespace", appTag)}"
+  }
+
   def prepareKubernetesNamespace(livyConf: LivyConf, namespace: String): Unit = {
     import KubernetesExtensions._
     import SparkKubernetesApp.kubernetesClient
 
-    kubernetesClient.createNamespace(namespace)
+    if (!kubernetesClient.containsNamespace(namespace)) kubernetesClient.createNamespace(namespace)
     val imagePullSecretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME)
     val imagePullSecretContent = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_CONTENT)
-    if (imagePullSecretName != null && imagePullSecretName.nonEmpty &&
-      imagePullSecretContent != null && imagePullSecretContent.nonEmpty) {
-      kubernetesClient.inAnyNamespace.createImagePullSecret(namespace, imagePullSecretName, imagePullSecretContent)
+    if (imagePullSecretName != null && imagePullSecretName.nonEmpty && imagePullSecretContent != null && imagePullSecretContent.nonEmpty) {
+      kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, imagePullSecretName, imagePullSecretContent)
     }
   }
 
