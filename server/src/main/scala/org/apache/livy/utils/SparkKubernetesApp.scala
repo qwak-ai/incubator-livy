@@ -50,9 +50,9 @@ object SparkKubernetesApp extends Logging {
         s"| gcTtl=[$gcTtl] " +
         s"| gcCheckInterval=[$gcCheckTimeout]"
     )
-    kubernetesNamespaceGcThread.setDaemon(true)
-    kubernetesNamespaceGcThread.setName("kubernetesGcThread")
-    kubernetesNamespaceGcThread.start()
+//    kubernetesNamespaceGcThread.setDaemon(true)
+//    kubernetesNamespaceGcThread.setName("kubernetesGcThread")
+//    kubernetesNamespaceGcThread.start()
   }
 
   private var cacheLogSize        : Int            = _
