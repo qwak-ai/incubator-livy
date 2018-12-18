@@ -23,12 +23,11 @@ import java.util
 
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
-
 import org.apache.commons.io.IOUtils
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs._
 import org.apache.hadoop.fs.Options.{CreateOpts, Rename}
 import org.apache.hadoop.fs.permission.{FsAction, FsPermission}
-
 import org.apache.livy.{LivyConf, Logging}
 import org.apache.livy.Utils.usingResource
 
@@ -49,7 +48,10 @@ class FileSystemStateStore(
   }
 
   private val fileContext: FileContext = mockFileContext.getOrElse {
-    FileContext.getFileContext(fsUri)
+    val conf = new Configuration()
+    // conf.set("key", "value") <-- hadoop creds from livyConf
+    // TODO classes may change on hadoop libs upgrade
+    FileContext.getFileContext(fsUri, conf)
   }
 
   {

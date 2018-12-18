@@ -79,7 +79,6 @@ class SparkKubernetesApp private[utils](
   import SparkApp.State._
   import SparkKubernetesApp._
 
-  private var namespace       : String          = _
   private val appIdPromise    : Promise[String] = Promise()
   private val namespacePromise: Promise[String] = Promise()
 
@@ -96,23 +95,28 @@ class SparkKubernetesApp private[utils](
       ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
 
   override def kill(): Unit = synchronized {
-    if (isRunning) {
-      try {
-        changeState(SparkApp.State.KILLED)
-        kubernetesAppMonitorThread.join(getKubernetesPollInterval(livyConf).toMillis * 2) // wait appMonitoring to finish
-        // TODO wait for logWatchMonitoringThread to finish (and others)
-        kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
-      } catch {
-        // TODO analyse possible exceptions and handle them
-        case _: TimeoutException | _: InterruptedException =>
-          warn("Deleting a session while its Kubernetes application is not found.")
-          kubernetesAppMonitorThread.interrupt()
-        // interrupt other threads of this app
-      } finally {
-        process.foreach(_.destroy())
-        info(s"Spark on Kubernetes app namespace [ $namespace ] was deleted: [ ${kubernetesClient.deleteNamespace(namespace)} ]")
-        // TODO check the finalization of app data persistence
-      }
+    try {
+      changeState(SparkApp.State.KILLED)
+      kubernetesAppMonitorThread.join(getKubernetesPollInterval(livyConf).toMillis * 2) // wait appMonitoring to finish
+      // TODO wait for logWatchMonitoringThread to finish (and others)
+      kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
+    } catch {
+      // TODO analyse possible exceptions and handle them
+      case _: TimeoutException | _: InterruptedException =>
+        warn("Deleting a session while its Kubernetes application is not found.")
+        kubernetesAppMonitorThread.interrupt()
+      // interrupt other threads of this app
+    } finally {
+      process.foreach(_.destroy())
+      info(s"Attempt to delete namespace [ ${namespacePromise.future.value} ] for app $appTag")
+      namespacePromise.future.onComplete(ns ⇒ {
+        if (ns.isSuccess) {
+          info(s"Spark on Kubernetes app namespace [ ${ns.get} ] was deleted: [ ${kubernetesClient.deleteNamespace(ns.get)} ]")
+        } else {
+          info(s"Namespace [ $ns ] is not found for app [ $appTag ]")
+        }
+      })(ExecutionContext.global)
+      // TODO check the finalization of app data persistence
     }
   }
 
@@ -152,7 +156,6 @@ class SparkKubernetesApp private[utils](
       driver.get.getMetadata.getNamespace
     } else {
       if (deadline.isOverdue) {
-        kill()
         throw new Exception(s"No Kubernetes application is found with tag $appTag in " +
           getKubernetesTagToAppIdTimeout(livyConf) / 1000 + " seconds. " +
           "Please check your cluster status, it is may be very busy.")
@@ -207,8 +210,7 @@ class SparkKubernetesApp private[utils](
       // If appId is not known, query Kubernetes by appTag to get it.
       val appId = findAppId
       appIdPromise.success(appId)
-      namespace = findNamespace(appTag)
-      namespacePromise.success(namespace)
+      namespacePromise.success(findNamespace(appTag))
 
       Thread.currentThread().setName(s"kubernetesAppMonitorThread-$appId")
       listener.foreach(_.appIdKnown(appId.toString))
@@ -323,11 +325,15 @@ object KubernetesExtensions {
 
     def buildNamespace(name: String): Namespace = new NamespaceBuilder().withNewMetadata.withName(name).endMetadata.build()
 
-    def createOrReplaceImagePullSecret(namespace: String, name: String, secret: String): Secret = client.secrets.createOrReplaceWithNew()
-      .withNewMetadata().withName(name).withNamespace(namespace).endMetadata
-      .withType(KUBERNETES_IMAGE_PULL_SECRET_TYPE)
-      .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, secret)
-      .done()
+    def createOrReplaceImagePullSecret(namespace: String, name: String, content: String): Secret = {
+      val secret = new SecretBuilder()
+        .withNewMetadata().withName(name).withNamespace(namespace).endMetadata
+        .withType(KUBERNETES_IMAGE_PULL_SECRET_TYPE)
+        .addToData(KUBERNETES_IMAGE_PULL_SECRET_DATA_KEY, content)
+        .build()
+      client.secrets.delete(secret)
+      client.secrets.create(secret)
+    }
 
     def getPodLog(pod: Pod, cacheLogSize: Int): IndexedSeq[String] = try {
       val name = pod.getMetadata.getName
@@ -397,7 +403,7 @@ object KubernetesUtils extends Logging {
   )
 
   def parseCreationTime(resource: HasMetadata): DateTime =
-    org.joda.time.DateTime.parse(resource.getMetadata.getCreationTimestamp.getTime).withZone(DateTimeZone.UTC)
+    org.joda.time.DateTime.parse(resource.getMetadata.getCreationTimestamp).withZone(DateTimeZone.UTC)
 
   def isExpired(resource: HasMetadata, ttl: FiniteDuration): Boolean =
     parseCreationTime(resource).plus(ttl.toMillis).isBefore(DateTime.now(DateTimeZone.UTC))

@@ -150,9 +150,6 @@ object LivyConf {
 
   val KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE = Entry("livy.server.kubernetes.experimental.enable", false)
 
-  val KUBERNETES_GC_CHECK_INTERVAL = Entry("livy.server.kubernetes.gc.check-interval", "1h")
-  val KUBERNETES_GC_TTL            = Entry("livy.server.kubernetes.gc.ttl", "24h")
-
   val KUBERNETES_IMAGE_PULL_SECRET_NAME = Entry("livy.server.kubernetes.imagePullSecret.name", "")
   val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSecret.content", "")
 
