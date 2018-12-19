@@ -73,13 +73,13 @@ object SparkApp {
       uniqueAppTag: String,
       livyConf: LivyConf,
       sparkConf: Map[String, String]): Map[String, String] = {
-    if (livyConf.isRunningOnYarn()) {
+    if (livyConf.isRunningOnYarn) {
       val userYarnTags = sparkConf.get(SPARK_YARN_TAG_KEY).map("," + _).getOrElse("")
       val mergedYarnTags = uniqueAppTag + userYarnTags
       sparkConf ++ Map(
         SPARK_YARN_TAG_KEY -> mergedYarnTags,
         "spark.yarn.submit.waitAppCompletion" -> "false")
-    } else if (livyConf.isRunningOnKubernetes()) {
+    } else if (livyConf.isRunningOnKubernetes) {
       import KubernetesConstants._
       sparkConf ++ Map(
         s"spark.kubernetes.driver.label.$KUBERNETES_SPARK_APP_TAG_LABEL" → uniqueAppTag,
@@ -101,9 +101,9 @@ object SparkApp {
       process: Option[LineBufferedProcess],
       livyConf: LivyConf,
       listener: Option[SparkAppListener]): SparkApp = {
-    if (livyConf.isRunningOnYarn()) {
+    if (livyConf.isRunningOnYarn) {
       new SparkYarnApp(uniqueAppTag, appId, process, listener, livyConf)
-    } else if (livyConf.isRunningOnKubernetes()) {
+    } else if (livyConf.isRunningOnKubernetes) {
       new SparkKubernetesApp(uniqueAppTag, appId, process, listener, livyConf)
     } else {
       require(process.isDefined, "process must not be None when Livy master is not YARN.")

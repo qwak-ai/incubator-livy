@@ -19,18 +19,16 @@ package org.apache.livy.server.batch
 
 import java.lang.ProcessBuilder.Redirect
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.UUID
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import org.apache.livy.server.recovery.SessionStore
+import org.apache.livy.sessions.Session._
+import org.apache.livy.sessions.{Session, SessionState}
+import org.apache.livy.utils._
+import org.apache.livy.{LivyConf, Logging, Utils}
 
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
-import scala.util.{Random, Try}
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import io.fabric8.kubernetes.api.model.{NamespaceBuilder, SecretBuilder}
-import org.apache.livy.{LivyConf, Logging, Utils}
-import org.apache.livy.server.recovery.SessionStore
-import org.apache.livy.server.SessionServlet
-import org.apache.livy.sessions.{Session, SessionState}
-import org.apache.livy.sessions.Session._
-import org.apache.livy.utils._
+import scala.util.Random
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 case class BatchRecoveryMetadata(
@@ -59,11 +57,11 @@ object BatchSession extends Logging {
       proxyUser: Option[String],
       sessionStore: SessionStore,
       mockApp: Option[SparkApp] = None): BatchSession = {
-    val appTag = s"livy-batch-$id-${Random.alphanumeric.take(8).mkString.toLowerCase}"
+    val appTag = s"livy-batch-$id-${Random.alphanumeric.take(8).mkString}"
 
     def createSparkApp(s: BatchSession): SparkApp = {
-      val masterSpecificConf = if (livyConf.isRunningOnKubernetes(true)) {
-        val namespace = KubernetesUtils.generateKubernetesNamespace(appTag, livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX), request.conf)
+      val masterSpecificConf = if (livyConf.isRunningOnKubernetes) {
+        val namespace = KubernetesUtils.generateKubernetesNamespace(appTag.toLowerCase, livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX), request.conf)
         KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace)
         KubernetesUtils.prepareKubernetesSpecificConf(request, namespace)
       } else {

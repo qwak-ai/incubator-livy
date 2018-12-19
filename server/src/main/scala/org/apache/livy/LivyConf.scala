@@ -18,16 +18,14 @@
 package org.apache.livy
 
 import java.io.File
-import java.lang.{Boolean => JBoolean, Long => JLong}
-import java.util.{Map => JMap}
-
-import scala.collection.JavaConverters._
+import java.lang.{Boolean ⇒ JBoolean, Long ⇒ JLong}
+import java.util.{Map ⇒ JMap}
 
 import org.apache.hadoop.conf.Configuration
-
 import org.apache.livy.client.common.ClientConf
-import org.apache.livy.client.common.ClientConf.ConfEntry
-import org.apache.livy.client.common.ClientConf.DeprecatedConf
+import org.apache.livy.client.common.ClientConf.{ConfEntry, DeprecatedConf}
+
+import scala.collection.JavaConverters._
 
 object LivyConf {
 
@@ -35,14 +33,16 @@ object LivyConf {
 
   object Entry {
     def apply(key: String, dflt: Boolean): Entry = Entry(key, dflt: JBoolean)
+
     def apply(key: String, dflt: Int): Entry = Entry(key, dflt: Integer)
+
     def apply(key: String, dflt: Long): Entry = Entry(key, dflt: JLong)
   }
 
   val TEST_MODE = ClientConf.TEST_MODE
 
-  val SPARK_HOME = Entry("livy.server.spark-home", null)
-  val LIVY_SPARK_MASTER = Entry("livy.spark.master", "local")
+  val SPARK_HOME             = Entry("livy.server.spark-home", null)
+  val LIVY_SPARK_MASTER      = Entry("livy.spark.master", "local")
   val LIVY_SPARK_DEPLOY_MODE = Entry("livy.spark.deploy-mode", null)
 
   // Two configurations to specify Spark and related Scala version. These are internal
@@ -50,76 +50,76 @@ object LivyConf {
   // set usually unless running with unofficial Spark + Scala versions
   // (like Spark 2.0 + Scala 2.10, Spark 1.6 + Scala 2.11)
   val LIVY_SPARK_SCALA_VERSION = Entry("livy.spark.scala-version", null)
-  val LIVY_SPARK_VERSION = Entry("livy.spark.version", null)
+  val LIVY_SPARK_VERSION       = Entry("livy.spark.version", null)
 
-  val SESSION_STAGING_DIR = Entry("livy.session.staging-dir", null)
+  val SESSION_STAGING_DIR  = Entry("livy.session.staging-dir", null)
   val FILE_UPLOAD_MAX_SIZE = Entry("livy.file.upload.max.size", 100L * 1024 * 1024)
-  val LOCAL_FS_WHITELIST = Entry("livy.file.local-dir-whitelist", null)
-  val ENABLE_HIVE_CONTEXT = Entry("livy.repl.enable-hive-context", false)
+  val LOCAL_FS_WHITELIST   = Entry("livy.file.local-dir-whitelist", null)
+  val ENABLE_HIVE_CONTEXT  = Entry("livy.repl.enable-hive-context", false)
 
   val ENVIRONMENT = Entry("livy.environment", "production")
 
-  val SERVER_HOST = Entry("livy.server.host", "0.0.0.0")
-  val SERVER_PORT = Entry("livy.server.port", 8998)
-  val SERVER_BASE_PATH = Entry("livy.ui.basePath", "")
-  val SERVER_PROXY_URL = Entry("livy.ui.proxyUrl", "")
+  val SERVER_HOST        = Entry("livy.server.host", "0.0.0.0")
+  val SERVER_PORT        = Entry("livy.server.port", 8998)
+  val SERVER_BASE_PATH   = Entry("livy.ui.basePath", "")
+  val SERVER_PROXY_URL   = Entry("livy.ui.proxyUrl", "")
   val HISTORY_SERVER_URL = Entry("livy.ui.historyServerUrl", "")
 
   val UI_ENABLED = Entry("livy.ui.enabled", true)
 
-  val REQUEST_HEADER_SIZE = Entry("livy.server.request-header.size", 131072)
+  val REQUEST_HEADER_SIZE  = Entry("livy.server.request-header.size", 131072)
   val RESPONSE_HEADER_SIZE = Entry("livy.server.response-header.size", 131072)
 
   val CSRF_PROTECTION = Entry("livy.server.csrf-protection.enabled", false)
 
   val IMPERSONATION_ENABLED = Entry("livy.impersonation.enabled", false)
-  val SUPERUSERS = Entry("livy.superusers", null)
+  val SUPERUSERS            = Entry("livy.superusers", null)
 
-  val ACCESS_CONTROL_ENABLED = Entry("livy.server.access-control.enabled", false)
+  val ACCESS_CONTROL_ENABLED       = Entry("livy.server.access-control.enabled", false)
   // Allowed users to access Livy, by default any user is allowed to access Livy. If user want to
   // limit who could access Livy, user should list all the permitted users with comma
   // separated.
   val ACCESS_CONTROL_ALLOWED_USERS = Entry("livy.server.access-control.allowed-users", "*")
-  val ACCESS_CONTROL_MODIFY_USERS = Entry("livy.server.access-control.modify-users", null)
-  val ACCESS_CONTROL_VIEW_USERS = Entry("livy.server.access-control.view-users", null)
+  val ACCESS_CONTROL_MODIFY_USERS  = Entry("livy.server.access-control.modify-users", null)
+  val ACCESS_CONTROL_VIEW_USERS    = Entry("livy.server.access-control.view-users", null)
 
-  val SSL_KEYSTORE = Entry("livy.keystore", null)
+  val SSL_KEYSTORE          = Entry("livy.keystore", null)
   val SSL_KEYSTORE_PASSWORD = Entry("livy.keystore.password", null)
-  val SSL_KEY_PASSWORD = Entry("livy.key-password", null)
+  val SSL_KEY_PASSWORD      = Entry("livy.key-password", null)
 
-  val AUTH_TYPE = Entry("livy.server.auth.type", null)
-  val AUTH_KERBEROS_PRINCIPAL = Entry("livy.server.auth.kerberos.principal", null)
-  val AUTH_KERBEROS_KEYTAB = Entry("livy.server.auth.kerberos.keytab", null)
+  val AUTH_TYPE                = Entry("livy.server.auth.type", null)
+  val AUTH_KERBEROS_PRINCIPAL  = Entry("livy.server.auth.kerberos.principal", null)
+  val AUTH_KERBEROS_KEYTAB     = Entry("livy.server.auth.kerberos.keytab", null)
   val AUTH_KERBEROS_NAME_RULES = Entry("livy.server.auth.kerberos.name-rules", "DEFAULT")
 
   val HEARTBEAT_WATCHDOG_INTERVAL = Entry("livy.server.heartbeat-watchdog.interval", "1m")
 
-  val LAUNCH_KERBEROS_PRINCIPAL = Entry("livy.server.launch.kerberos.principal", null)
-  val LAUNCH_KERBEROS_KEYTAB = Entry("livy.server.launch.kerberos.keytab", null)
+  val LAUNCH_KERBEROS_PRINCIPAL        = Entry("livy.server.launch.kerberos.principal", null)
+  val LAUNCH_KERBEROS_KEYTAB           = Entry("livy.server.launch.kerberos.keytab", null)
   val LAUNCH_KERBEROS_REFRESH_INTERVAL = Entry("livy.server.launch.kerberos.refresh-interval", "1h")
-  val KINIT_FAIL_THRESHOLD = Entry("livy.server.launch.kerberos.kinit-fail-threshold", 5)
+  val KINIT_FAIL_THRESHOLD             = Entry("livy.server.launch.kerberos.kinit-fail-threshold", 5)
 
   /**
-   * Recovery mode of Livy. Possible values:
-   * off: Default. Turn off recovery. Every time Livy shuts down, it stops and forgets all sessions.
-   * recovery: Livy persists session info to the state store. When Livy restarts, it recovers
-   *   previous sessions from the state store.
-   * Must set livy.server.recovery.state-store and livy.server.recovery.state-store.url to
-   * configure the state store.
-   */
-  val RECOVERY_MODE = Entry("livy.server.recovery.mode", "off")
+    * Recovery mode of Livy. Possible values:
+    * off: Default. Turn off recovery. Every time Livy shuts down, it stops and forgets all sessions.
+    * recovery: Livy persists session info to the state store. When Livy restarts, it recovers
+    * previous sessions from the state store.
+    * Must set livy.server.recovery.state-store and livy.server.recovery.state-store.url to
+    * configure the state store.
+    */
+  val RECOVERY_MODE            = Entry("livy.server.recovery.mode", "off")
   /**
-   * Where Livy should store state to for recovery. Possible values:
-   * <empty>: Default. State store disabled.
-   * filesystem: Store state on a file system.
-   * zookeeper: Store state in a Zookeeper instance.
-   */
-  val RECOVERY_STATE_STORE = Entry("livy.server.recovery.state-store", null)
+    * Where Livy should store state to for recovery. Possible values:
+    * <empty>: Default. State store disabled.
+    * filesystem: Store state on a file system.
+    * zookeeper: Store state in a Zookeeper instance.
+    */
+  val RECOVERY_STATE_STORE     = Entry("livy.server.recovery.state-store", null)
   /**
-   * For filesystem state store, the path of the state store directory. Please don't use a
-   * filesystem that doesn't support atomic rename (e.g. S3). e.g. file:///tmp/livy or hdfs:///.
-   * For zookeeper, the address to the Zookeeper servers. e.g. host1:port1,host2:port2
-   */
+    * For filesystem state store, the path of the state store directory. Please don't use a
+    * filesystem that doesn't support atomic rename (e.g. S3). e.g. file:///tmp/livy or hdfs:///.
+    * For zookeeper, the address to the Zookeeper servers. e.g. host1:port1,host2:port2
+    */
   val RECOVERY_STATE_STORE_URL = Entry("livy.server.recovery.state-store.url", "")
 
   // Livy will cache the max no of logs specified. 0 means don't cache the logs.
@@ -137,50 +137,65 @@ object LivyConf {
   // REPL related jars separated with comma.
   val REPL_JARS = Entry("livy.repl.jars", null)
   // RSC related jars separated with comma.
-  val RSC_JARS = Entry("livy.rsc.jars", null)
+  val RSC_JARS  = Entry("livy.rsc.jars", null)
 
   // How long to check livy session leakage
-  val YARN_APP_LEAKAGE_CHECK_TIMEOUT = Entry("livy.server.yarn.app-leakage.check-timeout", "600s")
-  // how often to check livy session leakage
+  val YARN_APP_LEAKAGE_CHECK_TIMEOUT  = Entry("livy.server.yarn.app-leakage.check-timeout", "600s")
+  // How often to check livy session leakage
   val YARN_APP_LEAKAGE_CHECK_INTERVAL = Entry("livy.server.yarn.app-leakage.check-interval", "60s")
 
-  // Kubernetes configs
-  val KUBERNETES_APP_LOOKUP_TIMEOUT = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
-  val KUBERNETES_POLL_INTERVAL = Entry("livy.server.kubernetes.poll-interval", "15s")
+  // Kubernetes master API endpoint
+  val KUBERNETES_MASTER_URL = Entry("livy.server.kubernetes.master-url", "https://kubernetes.default.svc")
 
-  val KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE = Entry("livy.server.kubernetes.experimental.enable", false)
+  // Kubernetes oauth token file path
+  val KUBERNETES_OAUTH_TOKEN_FILE  = Entry("livy.server.kubernetes.oauthTokenFile", "")
+  // Kubernetes oauth token string value
+  val KUBERNETES_OAUTH_TOKEN_VALUE = Entry("livy.server.kubernetes.oauthTokenValue", "")
+  // Kubernetes CA cert file path
+  val KUBERNETES_CA_CERT_FILE      = Entry("livy.server.kubernetes.caCertFile", "")
+  // Kubernetes client key file path
+  val KUBERNETES_CLIENT_KEY_FILE   = Entry("livy.server.kubernetes.clientKeyFile", "")
+  // Kubernetes client cert file path
+  val KUBERNETES_CLIENT_CERT_FILE  = Entry("livy.server.kubernetes.clientCertFile", "")
 
-  val KUBERNETES_IMAGE_PULL_SECRET_NAME = Entry("livy.server.kubernetes.imagePullSecret.name", "")
+  // How long to check livy session leakage
+  val KUBERNETES_APP_LOOKUP_TIMEOUT        = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
+  // How often to check livy session leakage
+  val KUBERNETES_POLL_INTERVAL             = Entry("livy.server.kubernetes.poll-interval", "15s")
+  // Prefix to append to Spark Job namespace on its creation
+  val KUBERNETES_SPARK_NAMESPACE_PREFIX    = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
+  // ImagePullSecret name to create in Spark Job namespace
+  val KUBERNETES_IMAGE_PULL_SECRET_NAME    = Entry("livy.server.kubernetes.imagePullSecret.name", "")
+  // TODO pass login/password instead of secret content
+  // ImagePullSecret base64 encoded content to create in Spark Job namespace
   val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSecret.content", "")
-
-  val KUBERNETES_SPARK_NAMESPACE_PREFIX = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"
-  val SESSION_TIMEOUT_CHECK = Entry("livy.server.session.timeout-check", true)
+  val SESSION_TIMEOUT_CHECK     = Entry("livy.server.session.timeout-check", true)
   // How long will an inactive session be gc-ed.
-  val SESSION_TIMEOUT = Entry("livy.server.session.timeout", "1h")
+  val SESSION_TIMEOUT           = Entry("livy.server.session.timeout", "1h")
   // How long a finished session state will be kept in memory
   val SESSION_STATE_RETAIN_TIME = Entry("livy.server.session.state-retain.sec", "600s")
   // Max creating session in livyServer
-  val SESSION_MAX_CREATION = Entry("livy.server.session.max-creation", 100)
+  val SESSION_MAX_CREATION      = Entry("livy.server.session.max-creation", 100)
 
-  val SPARK_MASTER = "spark.master"
+  val SPARK_MASTER      = "spark.master"
   val SPARK_DEPLOY_MODE = "spark.submit.deployMode"
-  val SPARK_JARS = "spark.jars"
-  val SPARK_FILES = "spark.files"
-  val SPARK_ARCHIVES = "spark.yarn.dist.archives"
-  val SPARK_PY_FILES = "spark.submit.pyFiles"
+  val SPARK_JARS        = "spark.jars"
+  val SPARK_FILES       = "spark.files"
+  val SPARK_ARCHIVES    = "spark.yarn.dist.archives"
+  val SPARK_PY_FILES    = "spark.submit.pyFiles"
 
   /**
-   * These are Spark configurations that contain lists of files that the user can add to
-   * their jobs in one way or another. Livy needs to pre-process these to make sure the
-   * user can read them (in case they reference local files), and to provide correct URIs
-   * to Spark based on the Livy config.
-   *
-   * The configuration allows adding new configurations in case we either forget something in
-   * the hardcoded list, or new versions of Spark add new configs.
-   */
+    * These are Spark configurations that contain lists of files that the user can add to
+    * their jobs in one way or another. Livy needs to pre-process these to make sure the
+    * user can read them (in case they reference local files), and to provide correct URIs
+    * to Spark based on the Livy config.
+    *
+    * The configuration allows adding new configurations in case we either forget something in
+    * the hardcoded list, or new versions of Spark add new configs.
+    */
   val SPARK_FILE_LISTS = Entry("livy.spark.file-list-configs", null)
 
   private val HARDCODED_SPARK_FILE_LISTS = Seq(
@@ -222,31 +237,35 @@ object LivyConf {
       DepConf("livy.server.access_control.users", "0.4")
     )
 
-    Map(configs.map { cfg => (cfg.key -> cfg) }: _*)
+    Map(configs.map {
+      cfg => (cfg.key -> cfg)
+    }: _*)
   }
 
 }
 
 /**
- *
- * @param loadDefaults whether to also load values from the Java system properties
- */
+  *
+  * @param loadDefaults whether to also load values from the Java system properties
+  */
 class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
 
   import LivyConf._
 
-  lazy val hadoopConf = new Configuration()
-  lazy val localFsWhitelist = configToSeq(LOCAL_FS_WHITELIST).map { path =>
-    // Make sure the path ends with a single separator.
-    path.stripSuffix("/") + "/"
+  lazy val hadoopConf       = new Configuration()
+  lazy val localFsWhitelist = configToSeq(LOCAL_FS_WHITELIST).map {
+    path =>
+      // Make sure the path ends with a single separator.
+      path.stripSuffix("/") + "/"
   }
 
   lazy val sparkFileLists = HARDCODED_SPARK_FILE_LISTS ++ configToSeq(SPARK_FILE_LISTS)
 
   /**
-   * Create a LivyConf that loads defaults from the system properties and the classpath.
-   * @return
-   */
+    * Create a LivyConf that loads defaults from the system properties and the classpath.
+    *
+    * @return
+    */
   def this() = this(true)
 
   if (loadDefaults) {
@@ -261,12 +280,10 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
   }
 
   /** Return true if spark master starts with yarn. */
-  def isRunningOnYarn(): Boolean = sparkMaster().startsWith("yarn")
+  def isRunningOnYarn: Boolean = sparkMaster().startsWith("yarn")
 
   /** Return true if spark master contains k8s. */
-  def isRunningOnKubernetes(experimentalFeatures: Boolean = false): Boolean = sparkMaster().contains("k8s") && {
-    if (experimentalFeatures) getBoolean(KUBERNETES_EXPERIMENTAL_FEATURES_ENABLE) else true
-  }
+  def isRunningOnKubernetes: Boolean = sparkMaster().contains("k8s")
 
 
   /** Return the spark deploy mode Livy sessions should use. */
@@ -280,7 +297,9 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
 
   /** Return the path to the spark-submit executable. */
   def sparkSubmit(): String = {
-    sparkHome().map { _ + File.separator + "bin" + File.separator + "spark-submit" }.get
+    sparkHome().map {
+      _ + File.separator + "bin" + File.separator + "spark-submit"
+    }.get
   }
 
   private val configDir: Option[File] = {
@@ -295,10 +314,11 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
   }
 
   private def loadFromMap(map: Iterable[(String, String)]): Unit = {
-    map.foreach { case (k, v) =>
-      if (k.startsWith("livy.")) {
-        set(k, v)
-      }
+    map.foreach {
+      case (k, v) =>
+        if (k.startsWith("livy.")) {
+          set(k, v)
+        }
     }
   }
 

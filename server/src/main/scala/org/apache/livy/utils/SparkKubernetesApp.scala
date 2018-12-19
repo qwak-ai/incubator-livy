@@ -16,10 +16,13 @@
  */
 package org.apache.livy.utils
 
+import java.io.File
 import java.lang
 import java.util.UUID
 import java.util.concurrent.TimeoutException
 
+import com.google.common.base.Charsets
+import com.google.common.io.Files
 import io.fabric8.kubernetes.api.model.{ConfigBuilder ⇒ _, _}
 import io.fabric8.kubernetes.client._
 import io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable
@@ -36,30 +39,20 @@ import scala.util.Try
 
 object SparkKubernetesApp extends Logging {
 
-  private var cacheLogSize: Int = _
+  private var cacheLogSize    : Int            = _
+  private var appLookupTimeout: FiniteDuration = _
+  private var pollInterval    : FiniteDuration = _
 
   // KubernetesClient is thread safe. Create once, share it across threads.
-  lazy val kubernetesClient: DefaultKubernetesClient = {
-    val config = new ConfigBuilder()
-      .withApiVersion("v1")
-      // TODO add config options to deploy Livy not inside Kubernetes cluster
-      //      .withMasterUrl("https://kubernetes.default.svc")
-      //      .withOauthToken(Files.toString(new File(KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH), Charsets.UTF_8))
-      //      .withCaCertFile(KUBERNETES_SERVICE_ACCOUNT_CA_CRT_PATH)
-      .build()
-    new DefaultKubernetesClient(config)
-  }
+  var kubernetesClient: DefaultKubernetesClient = _
 
   def init(livyConf: LivyConf): Unit = {
+    kubernetesClient = KubernetesClientFactory.createKubernetesClient(livyConf)
     cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
-    info(s"Initialized SparkKubernetesApp: master=[${livyConf.sparkMaster()}]")
+    appLookupTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT).milliseconds
+    pollInterval = livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL).milliseconds
+    info(s"Initialized SparkKubernetesApp: master=[ ${livyConf.sparkMaster()} ]")
   }
-
-  private def getKubernetesTagToAppIdTimeout(livyConf: LivyConf): FiniteDuration =
-    livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT).milliseconds
-
-  private def getKubernetesPollInterval(livyConf: LivyConf): FiniteDuration =
-    livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL).milliseconds
 
 }
 
@@ -69,7 +62,7 @@ class SparkKubernetesApp private[utils](
     process: Option[LineBufferedProcess],
     listener: Option[SparkAppListener],
     livyConf: LivyConf,
-    kubernetesClient: => KubernetesClient = SparkKubernetesApp.kubernetesClient) // For unit test. TODO ???
+    kubernetesClient: => KubernetesClient = SparkKubernetesApp.kubernetesClient) // For unit test.
   extends SparkApp
     with Logging {
 
@@ -97,7 +90,7 @@ class SparkKubernetesApp private[utils](
   override def kill(): Unit = synchronized {
     try {
       changeState(SparkApp.State.KILLED)
-      kubernetesAppMonitorThread.join(getKubernetesPollInterval(livyConf).toMillis * 2) // wait appMonitoring to finish
+      kubernetesAppMonitorThread.join(pollInterval.toMillis * 2) // wait appMonitoring to finish gracefully
       // TODO wait for logWatchMonitoringThread to finish (and others)
       kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
     } catch {
@@ -138,7 +131,7 @@ class SparkKubernetesApp private[utils](
       if (deadline.isOverdue) {
         kill()
         throw new Exception(s"No Kubernetes application is found with tag $appTag in " +
-          getKubernetesTagToAppIdTimeout(livyConf) / 1000 + " seconds. " +
+          appLookupTimeout / 1000 + " seconds. " +
           "Please check your cluster status, it is may be very busy.")
       } else {
         Clock.sleep(pollInterval.toMillis)
@@ -157,7 +150,7 @@ class SparkKubernetesApp private[utils](
     } else {
       if (deadline.isOverdue) {
         throw new Exception(s"No Kubernetes application is found with tag $appTag in " +
-          getKubernetesTagToAppIdTimeout(livyConf) / 1000 + " seconds. " +
+          appLookupTimeout / 1000 + " seconds. " +
           "Please check your cluster status, it is may be very busy.")
       } else {
         Clock.sleep(pollInterval.toMillis)
@@ -182,8 +175,7 @@ class SparkKubernetesApp private[utils](
 
   def findAppId: String = try {
     appIdOption.getOrElse {
-      val pollInterval = getKubernetesPollInterval(livyConf)
-      val deadline = getKubernetesTagToAppIdTimeout(livyConf).fromNow
+      val deadline = appLookupTimeout.fromNow
       getAppIdFromTag(appTag, pollInterval, deadline).get
     }
   } catch {
@@ -193,8 +185,7 @@ class SparkKubernetesApp private[utils](
   }
 
   def findNamespace(appTag: String): String = try {
-    val pollInterval = getKubernetesPollInterval(livyConf)
-    val deadline = getKubernetesTagToAppIdTimeout(livyConf).fromNow
+    val deadline = appLookupTimeout.fromNow
     getNamespaceFromTag(appTag, pollInterval, deadline)
   } catch {
     case e: Exception =>
@@ -215,7 +206,6 @@ class SparkKubernetesApp private[utils](
       Thread.currentThread().setName(s"kubernetesAppMonitorThread-$appId")
       listener.foreach(_.appIdKnown(appId.toString))
 
-      val pollInterval = getKubernetesPollInterval(livyConf)
       var appInfo = AppInfo()
 
       while (isRunning) {
@@ -398,7 +388,6 @@ object KubernetesUtils extends Logging {
   }
 
   def prepareKubernetesSpecificConf(request: CreateBatchRequest, namespace: String): Map[String, String] = Map(
-    "spark.app.id" -> getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
     "spark.kubernetes.namespace" → namespace
   )
 
@@ -418,5 +407,57 @@ object KubernetesUtils extends Logging {
 
   def isSparkDriverFinished(phase: String): Boolean =
     Try(Seq("succeeded", "failed").contains(phase.toLowerCase) || phase.toLowerCase.contains("backoff")).getOrElse(false)
+
+}
+
+object KubernetesClientFactory {
+
+  def createKubernetesClient(livyConf: LivyConf): DefaultKubernetesClient = {
+    val masterUrl = livyConf.get(LivyConf.KUBERNETES_MASTER_URL).toOption.getOrElse("https://kubernetes.default.svc")
+
+    val oauthTokenFile = livyConf.get(LivyConf.KUBERNETES_OAUTH_TOKEN_FILE).toOption
+    val oauthTokenValue = livyConf.get(LivyConf.KUBERNETES_OAUTH_TOKEN_VALUE).toOption
+    require(oauthTokenFile.isEmpty || oauthTokenValue.isEmpty,
+      s"Cannot specify OAuth token through both a file $oauthTokenFile and a value $oauthTokenValue.")
+
+    val caCertFile = livyConf.get(LivyConf.KUBERNETES_CA_CERT_FILE).toOption
+    val clientKeyFile = livyConf.get(LivyConf.KUBERNETES_CLIENT_KEY_FILE).toOption
+    val clientCertFile = livyConf.get(LivyConf.KUBERNETES_CLIENT_CERT_FILE).toOption
+
+    val config = new ConfigBuilder()
+      .withApiVersion("v1")
+      .withMasterUrl(masterUrl)
+      .withOption(oauthTokenValue) {
+        (token, configBuilder) => configBuilder.withOauthToken(token)
+      }
+      .withOption(oauthTokenFile) {
+        (filePath, configBuilder) => configBuilder.withOauthToken(Files.toString(new File(filePath), Charsets.UTF_8))
+      }
+      .withOption(caCertFile) {
+        (file, configBuilder) => configBuilder.withCaCertFile(file)
+      }
+      .withOption(clientKeyFile) {
+        (file, configBuilder) => configBuilder.withClientKeyFile(file)
+      }
+      .withOption(clientCertFile) {
+        (file, configBuilder) => configBuilder.withClientCertFile(file)
+      }
+      .build()
+    new DefaultKubernetesClient(config)
+  }
+
+  private implicit class OptionConfigurableConfigBuilder(val configBuilder: ConfigBuilder) extends AnyVal {
+    def withOption[T]
+    (option: Option[T])
+      (configurator: (T, ConfigBuilder) => ConfigBuilder): ConfigBuilder = {
+      option.map {
+        opt => configurator(opt, configBuilder)
+      }.getOrElse(configBuilder)
+    }
+  }
+
+  private implicit class OptionString(val string: String) extends AnyVal {
+    def toOption: Option[String] = if (string == null || string.isEmpty) None else Option(string)
+  }
 
 }
