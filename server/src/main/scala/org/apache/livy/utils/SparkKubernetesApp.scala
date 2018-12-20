@@ -22,10 +22,11 @@ import java.util.UUID
 import java.util.concurrent.TimeoutException
 
 import com.google.common.base.Charsets
-import com.google.common.io.Files
+import com.google.common.io.{BaseEncoding, Files}
 import io.fabric8.kubernetes.api.model.{ConfigBuilder ⇒ _, _}
 import io.fabric8.kubernetes.client._
 import io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable
+import org.apache.livy.server.batch.CreateBatchRequest
 import org.apache.livy.{LivyConf, Logging, Utils}
 import org.joda.time.{DateTime, DateTimeZone}
 
@@ -351,7 +352,6 @@ object KubernetesConstants {
 object KubernetesUtils extends Logging {
 
   import KubernetesConstants._
-  import org.apache.livy.server.batch.CreateBatchRequest
 
   def formatAppId(appId: String): String = {
     val formatted = s"stub.$appId".split("\\.").last.toLowerCase().replaceAll("[^0-9a-z]", "")
@@ -375,19 +375,34 @@ object KubernetesUtils extends Logging {
     s"$prefix-${sparkConf.getOrElse("spark.kubernetes.namespace", appTag)}"
   }
 
+  def encodeImagePullSecretContent(registry: String, user: String, password: String): String = {
+    val auth = BaseEncoding.base64.encode(s"$user:$password".getBytes(Charsets.UTF_8))
+    BaseEncoding.base64.encode(s"""{"auths":{"$registry":{"auth":"$auth"}}}""".getBytes(Charsets.UTF_8))
+  }
+
   def prepareKubernetesNamespace(livyConf: LivyConf, namespace: String): Unit = {
     import KubernetesExtensions._
     import SparkKubernetesApp.kubernetesClient
 
     if (!kubernetesClient.containsNamespace(namespace)) kubernetesClient.createNamespace(namespace)
-    val imagePullSecretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME)
-    val imagePullSecretContent = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_CONTENT)
-    if (imagePullSecretName != null && imagePullSecretName.nonEmpty && imagePullSecretContent != null && imagePullSecretContent.nonEmpty) {
-      kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, imagePullSecretName, imagePullSecretContent)
+    val secretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME).toOption
+    val registry = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_REGISTRY).toOption
+    val user = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_USER).toOption
+    val password = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_PASSWORD).toOption
+    val secretContent = if (Seq(secretName, registry, user, password).forall(_.isDefined)) {
+      Option(encodeImagePullSecretContent(registry.get, user.get, password.get))
+    } else {
+      if (Seq(secretName, registry, user, password).exists(_.isDefined))
+        warn(s"Not all imagePullSecret config options are passed: livy.server.kubernetes.imagePullSecret.[name, registry, user, password]. Skipping creating secret.")
+      None
+    }
+    if (secretContent.isDefined) {
+      kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, secretName.get, secretContent.get)
     }
   }
 
-  def prepareKubernetesSpecificConf(request: CreateBatchRequest, namespace: String): Map[String, String] = Map(
+  def prepareKubernetesSpecificConf(namespace: String, request: CreateBatchRequest): Map[String, String] = Map(
+    "spark.app.id" → getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
     "spark.kubernetes.namespace" → namespace
   )
 
@@ -408,9 +423,15 @@ object KubernetesUtils extends Logging {
   def isSparkDriverFinished(phase: String): Boolean =
     Try(Seq("succeeded", "failed").contains(phase.toLowerCase) || phase.toLowerCase.contains("backoff")).getOrElse(false)
 
+  implicit class OptionString(val string: String) extends AnyVal {
+    def toOption: Option[String] = if (string == null || string.isEmpty) None else Option(string)
+  }
+
 }
 
 object KubernetesClientFactory {
+
+  import KubernetesUtils.OptionString
 
   def createKubernetesClient(livyConf: LivyConf): DefaultKubernetesClient = {
     val masterUrl = livyConf.get(LivyConf.KUBERNETES_MASTER_URL).toOption.getOrElse("https://kubernetes.default.svc")
@@ -454,10 +475,6 @@ object KubernetesClientFactory {
         opt => configurator(opt, configBuilder)
       }.getOrElse(configBuilder)
     }
-  }
-
-  private implicit class OptionString(val string: String) extends AnyVal {
-    def toOption: Option[String] = if (string == null || string.isEmpty) None else Option(string)
   }
 
 }

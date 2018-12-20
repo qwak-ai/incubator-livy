@@ -63,7 +63,7 @@ object BatchSession extends Logging {
       val masterSpecificConf = if (livyConf.isRunningOnKubernetes) {
         val namespace = KubernetesUtils.generateKubernetesNamespace(appTag.toLowerCase, livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX), request.conf)
         KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace)
-        KubernetesUtils.prepareKubernetesSpecificConf(request, namespace)
+        KubernetesUtils.prepareKubernetesSpecificConf(namespace, request)
       } else {
         Map()
       }

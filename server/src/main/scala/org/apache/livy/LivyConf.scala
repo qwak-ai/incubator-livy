@@ -159,16 +159,19 @@ object LivyConf {
   val KUBERNETES_CLIENT_CERT_FILE  = Entry("livy.server.kubernetes.clientCertFile", "")
 
   // How long to check livy session leakage
-  val KUBERNETES_APP_LOOKUP_TIMEOUT        = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
+  val KUBERNETES_APP_LOOKUP_TIMEOUT         = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
   // How often to check livy session leakage
-  val KUBERNETES_POLL_INTERVAL             = Entry("livy.server.kubernetes.poll-interval", "15s")
+  val KUBERNETES_POLL_INTERVAL              = Entry("livy.server.kubernetes.poll-interval", "15s")
   // Prefix to append to Spark Job namespace on its creation
-  val KUBERNETES_SPARK_NAMESPACE_PREFIX    = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
+  val KUBERNETES_SPARK_NAMESPACE_PREFIX     = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
   // ImagePullSecret name to create in Spark Job namespace
-  val KUBERNETES_IMAGE_PULL_SECRET_NAME    = Entry("livy.server.kubernetes.imagePullSecret.name", "")
-  // TODO pass login/password instead of secret content
-  // ImagePullSecret base64 encoded content to create in Spark Job namespace
-  val KUBERNETES_IMAGE_PULL_SECRET_CONTENT = Entry("livy.server.kubernetes.imagePullSecret.content", "")
+  val KUBERNETES_IMAGE_PULL_SECRET_NAME     = Entry("livy.server.kubernetes.imagePullSecret.name", "")
+  // ImagePullSecret registry
+  val KUBERNETES_IMAGE_PULL_SECRET_REGISTRY = Entry("livy.server.kubernetes.imagePullSecret.registry", "")
+  // ImagePullSecret username
+  val KUBERNETES_IMAGE_PULL_SECRET_USER     = Entry("livy.server.kubernetes.imagePullSecret.user", "")
+  // ImagePullSecret password
+  val KUBERNETES_IMAGE_PULL_SECRET_PASSWORD = Entry("livy.server.kubernetes.imagePullSecret.password", "")
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"
@@ -282,8 +285,8 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
   /** Return true if spark master starts with yarn. */
   def isRunningOnYarn: Boolean = sparkMaster().startsWith("yarn")
 
-  /** Return true if spark master contains k8s. */
-  def isRunningOnKubernetes: Boolean = sparkMaster().contains("k8s")
+  /** Return true if spark master contains 'k8s://'. */
+  def isRunningOnKubernetes: Boolean = sparkMaster().contains("k8s://")
 
 
   /** Return the spark deploy mode Livy sessions should use. */
