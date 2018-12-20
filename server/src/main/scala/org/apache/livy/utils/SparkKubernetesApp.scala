@@ -16,23 +16,24 @@
  */
 package org.apache.livy.utils
 
-import java.io.File
+import java.io._
 import java.lang
 import java.util.UUID
 import java.util.concurrent.TimeoutException
 
 import com.google.common.base.Charsets
 import com.google.common.io.{BaseEncoding, Files}
-import io.fabric8.kubernetes.api.model.{ConfigBuilder ⇒ _, _}
+import io.fabric8.kubernetes.api.model.{ConfigBuilder => _, _}
 import io.fabric8.kubernetes.client._
-import io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable
+import io.fabric8.kubernetes.client.dsl.{FilterWatchListDeletable, LogWatch, PodResource}
 import org.apache.livy.server.batch.CreateBatchRequest
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.livy.{LivyConf, Logging, Utils}
 import org.joda.time.{DateTime, DateTimeZone}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.concurrent._
 import scala.concurrent.duration._
 import scala.language.postfixOps
@@ -40,9 +41,16 @@ import scala.util.Try
 
 object SparkKubernetesApp extends Logging {
 
-  private var cacheLogSize    : Int            = _
-  private var appLookupTimeout: FiniteDuration = _
-  private var pollInterval    : FiniteDuration = _
+  private var cacheLogSize      : Int            = _
+  private var appLookupTimeout  : FiniteDuration = _
+  private var pollInterval      : FiniteDuration = _
+  private var logRootPath       : String         = _
+  private var recoveryMode      : String         = _
+  private var recoveryStateStore: String         = _
+  private var logStoreEnabled   : Boolean        = _
+  private var logBufferSize     : Int            = _
+  
+
 
   // KubernetesClient is thread safe. Create once, share it across threads.
   var kubernetesClient: DefaultKubernetesClient = _
@@ -52,6 +60,12 @@ object SparkKubernetesApp extends Logging {
     cacheLogSize = livyConf.getInt(LivyConf.SPARK_LOGS_SIZE)
     appLookupTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT).milliseconds
     pollInterval = livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL).milliseconds
+    logRootPath = livyConf.get(LivyConf.LOGS_STORE_URL)
+    logBufferSize = livyConf.getInt(LivyConf.LOGS_STORE_BUFFER_SIZE)
+    recoveryMode = livyConf.get(LivyConf.RECOVERY_MODE)
+    recoveryStateStore = livyConf.get(LivyConf.RECOVERY_STATE_STORE)
+    logStoreEnabled = livyConf.getBoolean(LivyConf.LOGS_STORE_ENABLED)
+
     info(s"Initialized SparkKubernetesApp: master=[ ${livyConf.sparkMaster()} ]")
   }
 
@@ -91,9 +105,12 @@ class SparkKubernetesApp private[utils](
   override def kill(): Unit = synchronized {
     try {
       changeState(SparkApp.State.KILLED)
+
       kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
       kubernetesAppMonitorThread.join(pollInterval.toMillis * 2) // wait appMonitoring to finish gracefully
       // TODO wait for logWatchMonitoringThread to finish (and others)
+      logMonitorThread.join(pollInterval.toMillis * 2) // wait logMonitoring to finish
+
     } catch {
       // TODO analyse possible exceptions and handle them
       case _: TimeoutException | _: InterruptedException =>
@@ -133,7 +150,7 @@ class SparkKubernetesApp private[utils](
         kill()
         throw new Exception(s"No Kubernetes application is found with tag $appTag in " +
           appLookupTimeout / 1000 + " seconds. " +
-          "Please check your cluster status, it is may be very busy.")
+          "Please check your cluster status, it may be very busy.")
       } else {
         Clock.sleep(pollInterval.toMillis)
         getAppIdFromTag(appTag, pollInterval, deadline)
@@ -261,6 +278,97 @@ class SparkKubernetesApp private[utils](
     }
   }
 
+  private[utils] val logMonitorThread = Utils.startDaemonThread(s"logMonitorThread-$this") {
+    if(logStoreEnabled) {
+      try {
+        val appId = appIdPromise.future
+
+        Thread.currentThread().setName(s"logMonitorThread-$appId")
+
+        val logFolderPath = new Path(logRootPath, s"log_$appId")
+        val logFilePath = new Path(logFolderPath, "log")
+        val metadataPath= new Path(logFolderPath, "_METADATA")
+
+        val logBuffer = new ListBuffer[String]()
+        var lastTimestamp:String = null
+
+        val fs: FileSystem = FileSystem.get(logFilePath.toUri, livyConf.hadoopConf)
+        //create intermediate folders if they don't exist
+        fs.mkdirs(logFolderPath)
+        val isRecovery = fs.exists(logFilePath) && recoveryMode.equals("recovery") && recoveryStateStore.equals("filesystem")
+
+        val driver = kubernetesClient.getSparkDriverByAppTag(appTag)
+        val pod = kubernetesClient.getPodResource(driver.get).usingTimestamps()
+
+        val out = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(logFilePath.toString, isRecovery)))
+        var watchLog : LogWatch = null
+        try {
+          watchLog = if (isRecovery) {
+            val previousTimestamp = readLineFromFile(fs, metadataPath)
+            pod.sinceTime(previousTimestamp).watchLog()
+          } else {
+            pod.watchLog()
+          }
+          val logReader = new BufferedReader(new InputStreamReader(watchLog.getOutput))
+
+          while (isRunning) {
+            if (logBuffer.length < logBufferSize) {
+              if (logReader.ready()) {
+                val line = logReader.readLine()
+                logBuffer.append(line)
+              }else{
+                Clock.sleep(pollInterval.toMillis)
+              }
+            } else {
+              lastTimestamp = logBuffer.last.split(" ")(0)
+              cleanUpBuffer(logBuffer, out)
+
+              out.flush()
+              logBuffer.clear()
+            }
+          }
+        }catch{
+          case e: Throwable => error(s"Error while logs consuming: $e")
+        }finally {
+          if (watchLog != null) {
+            if(logBuffer.nonEmpty){
+              lastTimestamp = logBuffer.last.split(" ")(0)
+            }
+            cleanUpBuffer(logBuffer, out)
+            watchLog.close()
+
+            if(lastTimestamp.nonEmpty) writeToFile(fs, metadataPath, lastTimestamp)
+          }
+        }
+      } catch {
+        case e: Throwable => error(s"Error during logs monitoring thread execution: $e")
+      }
+    }
+  }
+
+  def cleanUpBuffer(buffer: ListBuffer[String], out: BufferedWriter): Unit ={
+    buffer.foreach(x => {
+      out.write(x)
+      out.newLine()
+    })
+    out.flush()
+    buffer.clear()
+  }
+
+  def writeToFile(fs: FileSystem, path: Path, content: String): Unit = {
+    val metadataOut = fs.create(path)
+    metadataOut.write(content.getBytes)
+    metadataOut.flush()
+    metadataOut.close()
+  }
+
+  def readLineFromFile(fs: FileSystem, path: Path): String = {
+    val metadataIn = new BufferedReader(new InputStreamReader(fs.open(path)))
+    val content = metadataIn.readLine()
+    metadataIn.close()
+    content
+  }
+
   def buildSparkPodDiagnosticsPrettyString(pod: Pod): String = {
     def printMap(map: mutable.Map[_, _]): String = map.map {
       case (key, value) ⇒ s"$key=$value"
@@ -327,16 +435,18 @@ object KubernetesExtensions {
     }
 
     def getPodLog(pod: Pod, cacheLogSize: Int): IndexedSeq[String] = try {
-      val name = pod.getMetadata.getName
-      val namespace = pod.getMetadata.getNamespace
-      client.pods.inNamespace(namespace).withName(name)
-        .tailingLines(cacheLogSize).getLog.split("\n").toIndexedSeq
+      getPodResource(pod).tailingLines(cacheLogSize).getLog.split("\n").toIndexedSeq
     } catch {
       case e: Throwable ⇒
         ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
     }
-  }
 
+    def getPodResource(pod:Pod): PodResource[Pod, DoneablePod] = try{
+      val name = pod.getMetadata.getName
+      val namespace = pod.getMetadata.getNamespace
+      client.pods.inNamespace(namespace).withName(name)
+    }
+  }
 }
 
 object KubernetesConstants {
