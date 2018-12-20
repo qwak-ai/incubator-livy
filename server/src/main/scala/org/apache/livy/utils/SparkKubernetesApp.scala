@@ -257,7 +257,7 @@ class SparkKubernetesApp private[utils](
         kubernetesDiagnostics = ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
         changeState(SparkApp.State.FAILED)
     } finally {
-      // TODO flush recovery data: AppInfo, LogCache, KubernetesDiagnostics ??
+      info(s"Finished monitoring app [ $appTag ] in namespace [ ${namespacePromise.future.value} ]")
     }
   }
 
@@ -372,7 +372,7 @@ object KubernetesUtils extends Logging {
   }
 
   def generateKubernetesNamespace(appTag: String, prefix: String, sparkConf: Map[String, String]): String = {
-    s"$prefix-${sparkConf.getOrElse("spark.kubernetes.namespace", appTag)}"
+    s"$prefix${sparkConf.getOrElse("spark.kubernetes.namespace", appTag)}"
   }
 
   def encodeImagePullSecretContent(registry: String, user: String, password: String): String = {

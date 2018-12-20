@@ -163,7 +163,7 @@ object LivyConf {
   // How often to check livy session leakage
   val KUBERNETES_POLL_INTERVAL              = Entry("livy.server.kubernetes.poll-interval", "15s")
   // Prefix to append to Spark Job namespace on its creation
-  val KUBERNETES_SPARK_NAMESPACE_PREFIX     = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark")
+  val KUBERNETES_SPARK_NAMESPACE_PREFIX     = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark-")
   // ImagePullSecret name to create in Spark Job namespace
   val KUBERNETES_IMAGE_PULL_SECRET_NAME     = Entry("livy.server.kubernetes.imagePullSecret.name", "")
   // ImagePullSecret registry
