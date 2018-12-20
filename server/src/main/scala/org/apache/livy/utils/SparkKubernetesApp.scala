@@ -49,7 +49,7 @@ object SparkKubernetesApp extends Logging {
   private var recoveryStateStore: String         = _
   private var logStoreEnabled   : Boolean        = _
   private var logBufferSize     : Int            = _
-  
+
 
 
   // KubernetesClient is thread safe. Create once, share it across threads.
@@ -281,7 +281,8 @@ class SparkKubernetesApp private[utils](
   private[utils] val logMonitorThread = Utils.startDaemonThread(s"logMonitorThread-$this") {
     if(logStoreEnabled) {
       try {
-        val appId = appIdPromise.future
+        Await.ready(appIdPromise.future, appLookupTimeout)
+        val appId = appIdPromise.future.value.get.get
 
         Thread.currentThread().setName(s"logMonitorThread-$appId")
 
