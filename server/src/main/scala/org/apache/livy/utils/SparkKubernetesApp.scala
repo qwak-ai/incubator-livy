@@ -91,9 +91,9 @@ class SparkKubernetesApp private[utils](
   override def kill(): Unit = synchronized {
     try {
       changeState(SparkApp.State.KILLED)
+      kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
       kubernetesAppMonitorThread.join(pollInterval.toMillis * 2) // wait appMonitoring to finish gracefully
       // TODO wait for logWatchMonitoringThread to finish (and others)
-      kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
     } catch {
       // TODO analyse possible exceptions and handle them
       case _: TimeoutException | _: InterruptedException =>
@@ -389,16 +389,10 @@ object KubernetesUtils extends Logging {
     val registry = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_REGISTRY).toOption
     val user = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_USER).toOption
     val password = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_PASSWORD).toOption
-    val secretContent = if (Seq(secretName, registry, user, password).forall(_.isDefined)) {
-      Option(encodeImagePullSecretContent(registry.get, user.get, password.get))
-    } else {
-      if (Seq(secretName, registry, user, password).exists(_.isDefined))
-        warn(s"Not all imagePullSecret config options are passed: livy.server.kubernetes.imagePullSecret.[name, registry, user, password]. Skipping creating secret.")
-      None
-    }
-    if (secretContent.isDefined) {
-      kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, secretName.get, secretContent.get)
-    }
+    require(Seq(secretName, registry, user, password).forall(_.isDefined) || Seq(secretName, registry, user, password).forall(_.isEmpty),
+      "ImagePullSecret config options should either be set all or none: livy.server.kubernetes.imagePullSecret.[name, registry, user, password]")
+    val secretContent = encodeImagePullSecretContent(registry.get, user.get, password.get)
+    kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, secretName.get, secretContent)
   }
 
   def prepareKubernetesSpecificConf(namespace: String, request: CreateBatchRequest): Map[String, String] = Map(
