@@ -308,16 +308,13 @@ class SparkKubernetesApp private[utils](
           }
         }
 
-
         val isRecovery = fc.util().exists(logFilePath) && recoveryMode.equals("recovery") && recoveryStateStore.equals("filesystem")
         val writerMode = if (isRecovery) CreateFlag.APPEND else CreateFlag.OVERWRITE
-
 
         val driver = kubernetesClient.getSparkDriverByAppTag(appTag)
         val pod = kubernetesClient.getPodResource(driver.get).usingTimestamps()
 
-        val createFlag = util.EnumSet.of(CreateFlag.CREATE, writerMode)
-        val out = new BufferedWriter(new OutputStreamWriter(fc.create(logFilePath, createFlag, CreateOpts.createParent())))
+        var out = new BufferedWriter(new OutputStreamWriter(fc.create(logFilePath, util.EnumSet.of(CreateFlag.CREATE, writerMode), CreateOpts.createParent())))
 
         info(s"Attempt to write logs for app [ $appTag ] in namespace [ ${namespacePromise.future.value} ] to path [ $logFilePath ], recovery mode: [ $isRecovery ] ")
 
@@ -341,7 +338,9 @@ class SparkKubernetesApp private[utils](
               }
             } else {
               writeMetadata()
-              cleanUpBuffer(logBuffer, out)
+              cleanBufferCloseWriter(logBuffer, out)
+              //reopen out writer
+              out = new BufferedWriter(new OutputStreamWriter(fc.create(logFilePath, util.EnumSet.of(CreateFlag.CREATE, CreateFlag.APPEND))))
             }
           }
         }catch{
@@ -349,8 +348,7 @@ class SparkKubernetesApp private[utils](
         }finally {
           if (watchLog != null) {
             writeMetadata()
-            cleanUpBuffer(logBuffer, out)
-            out.close()
+            cleanBufferCloseWriter(logBuffer, out)
             watchLog.close()
           }
         }
@@ -362,12 +360,13 @@ class SparkKubernetesApp private[utils](
     }
   }
 
-  def cleanUpBuffer(buffer: ListBuffer[String], out: BufferedWriter): Unit ={
+  def cleanBufferCloseWriter(buffer: ListBuffer[String], out: BufferedWriter): Unit ={
     buffer.foreach(x => {
       out.write(x)
       out.newLine()
     })
-    out.flush()
+    //because flush has no influence we should close writer and reopen it
+    out.close()
     buffer.clear()
   }
 
