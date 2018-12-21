@@ -296,8 +296,18 @@ class SparkKubernetesApp private[utils](
 
         val logBuffer = new ListBuffer[String]()
         var lastTimestamp:String = null
+        var newTimestamp: Option[String] = None
 
         val fc : FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
+
+        def writeMetadata(): Unit = {
+          newTimestamp = Try{logBuffer.last.split(" ")(0)}.toOption
+          if (newTimestamp.isDefined && newTimestamp.get != lastTimestamp) {
+            lastTimestamp = newTimestamp.get
+            writeLineToFile(fc, metadataPath, lastTimestamp)
+          }
+        }
+
 
         val isRecovery = fc.util().exists(logFilePath) && recoveryMode.equals("recovery") && recoveryStateStore.equals("filesystem")
         val writerMode = if (isRecovery) CreateFlag.APPEND else CreateFlag.OVERWRITE
@@ -308,6 +318,8 @@ class SparkKubernetesApp private[utils](
 
         val createFlag = util.EnumSet.of(CreateFlag.CREATE, writerMode)
         val out = new BufferedWriter(new OutputStreamWriter(fc.create(logFilePath, createFlag, CreateOpts.createParent())))
+
+        info(s"Attempt to write logs for app [ $appTag ] in namespace [ ${namespacePromise.future.value} ] to path [ $logFilePath ], recovery mode: [ $isRecovery ] ")
 
         var watchLog : LogWatch = null
         try {
@@ -328,29 +340,24 @@ class SparkKubernetesApp private[utils](
                 Clock.sleep(pollInterval.toMillis)
               }
             } else {
-              lastTimestamp = logBuffer.last.split(" ")(0)
+              writeMetadata()
               cleanUpBuffer(logBuffer, out)
-
-              out.flush()
-              logBuffer.clear()
             }
           }
         }catch{
           case e: Throwable => error(s"Error while logs consuming: " + ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*).mkString("\n"))
         }finally {
           if (watchLog != null) {
-            if(logBuffer.nonEmpty){
-              lastTimestamp = logBuffer.last.split(" ")(0)
-            }
+            writeMetadata()
             cleanUpBuffer(logBuffer, out)
             out.close()
             watchLog.close()
-
-            if(lastTimestamp.nonEmpty) writeLineToFile(fc, metadataPath, lastTimestamp)
           }
         }
       } catch {
         case e: Throwable => error(s"Error during logs monitoring thread execution: " + ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*).mkString("\n"))
+      }finally {
+        info(s"Finished log monitoring app [ $appTag ] in namespace [ ${namespacePromise.future.value} ]")
       }
     }
   }
@@ -451,7 +458,7 @@ object KubernetesExtensions {
         ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
     }
 
-    def getPodResource(pod:Pod): PodResource[Pod, DoneablePod] = try{
+    def getPodResource(pod:Pod): PodResource[Pod, DoneablePod] = {
       val name = pod.getMetadata.getName
       val namespace = pod.getMetadata.getNamespace
       client.pods.inNamespace(namespace).withName(name)
