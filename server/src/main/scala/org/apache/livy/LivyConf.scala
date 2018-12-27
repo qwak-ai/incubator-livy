@@ -328,6 +328,9 @@ class LivyConf(loadDefaults: Boolean) extends ClientConf[LivyConf](null) {
         if (k.startsWith("livy.")) {
           set(k, v)
         }
+        if (k.startsWith("livy.hadoop.")) {
+          hadoopConf.set(k.replace("livy.hadoop.", ""), v)
+        }
     }
   }
 
