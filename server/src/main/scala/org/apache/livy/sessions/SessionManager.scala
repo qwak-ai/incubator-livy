@@ -20,12 +20,13 @@ package org.apache.livy.sessions
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
+import org.apache.hadoop.fs.{FileContext, Path}
+
 import scala.collection.mutable
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
-
 import org.apache.livy.{LivyConf, Logging}
 import org.apache.livy.server.batch.{BatchRecoveryMetadata, BatchSession}
 import org.apache.livy.server.interactive.{InteractiveRecoveryMetadata, InteractiveSession, SessionHeartbeatWatchdog}
@@ -111,6 +112,10 @@ class SessionManager[S <: Session, R <: RecoveryMetadata : ClassTag](
     session.stop().map { case _ =>
       try {
         sessionStore.remove(sessionType, session.id)
+
+        val logStoreEnabled = livyConf.getBoolean(LivyConf.LOGS_STORE_ENABLED)
+        if(logStoreEnabled) cleanLogStore(session)
+
         synchronized {
           sessions.remove(session.id)
         }
@@ -129,6 +134,20 @@ class SessionManager[S <: Session, R <: RecoveryMetadata : ClassTag](
         Await.ready(future, Duration.Inf)
       }
     }
+  }
+
+  def cleanLogStore(session: S): Unit = try{
+    val logRootPath = livyConf.get(LivyConf.LOGS_STORE_URL)
+    val LOG_FOLDER_PREFIX = "log_"
+    val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX${session.appId}")
+
+    val fc : FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
+
+    info(s"Removing logs for appId [ ${session.appId} ] path [$logFolderPath]")
+    fc.delete(logFolderPath, true)
+  }catch {
+    case Throwable =>
+      error("Exception was thrown during logs clean up: ", _)
   }
 
   def collectGarbage(): Future[Iterable[Unit]] = {
