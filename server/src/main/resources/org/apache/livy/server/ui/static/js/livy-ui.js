@@ -49,7 +49,7 @@ function killLink(id, inner) {
 
 function historyServerLink(session) {
   var historyServerUrl = session.appInfo.historyServerUrl;
-  if (historyServerUrl != null && session.state != "running") {
+  if (historyServerUrl != null && session.state != "starting" && session.state != "running") {
     return anchorLink(historyServerUrl, session.appId + " history")
   } else {
     return session.appId;

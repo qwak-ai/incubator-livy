@@ -166,6 +166,8 @@ class BatchSession(
 
   override def logLines(): IndexedSeq[String] = app.log()
 
+  override def downloadLogs(): String = app.downloadLogs()
+
   override def stopSession(): Unit = {
     app.kill()
   }

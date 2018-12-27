@@ -448,6 +448,8 @@ class InteractiveSession(
 
   override def logLines(): IndexedSeq[String] = app.map(_.log()).getOrElse(sessionLog)
 
+  override def downloadLogs(): String = app.map(_.downloadLogs()).getOrElse(sessionLog.mkString("\n"))
+
   override def recoveryMetadata: RecoveryMetadata =
     InteractiveRecoveryMetadata(
       id, appId, appTag, kind, heartbeatTimeout.toSeconds.toInt, owner, proxyUser, rscDriverUri)

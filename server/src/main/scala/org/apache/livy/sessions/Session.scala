@@ -163,6 +163,8 @@ abstract class Session(val id: Int, val owner: String, val livyConf: LivyConf)
 
   def logLines(): IndexedSeq[String]
 
+  def downloadLogs(): String
+
   def recordActivity(): Unit = {
     _lastActivity = System.nanoTime()
   }

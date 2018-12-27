@@ -28,6 +28,8 @@ class MockSession(id: Int, owner: String, conf: LivyConf) extends Session(id, ow
 
   override def logLines(): IndexedSeq[String] = IndexedSeq()
 
+  override def downloadLogs(): String = ""
+
   override def state: SessionState = SessionState.Idle
 
   override def recoveryMetadata: RecoveryMetadata = RecoveryMetadata(0)

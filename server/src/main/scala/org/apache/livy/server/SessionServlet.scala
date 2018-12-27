@@ -106,6 +106,12 @@ abstract class SessionServlet[S <: Session, R <: RecoveryMetadata](
     }
   }
 
+  get("/:id/log/full") {
+    withViewAccessSession {
+      _.downloadLogs()
+    }
+  }
+
   delete("/:id") {
     withModifyAccessSession { session =>
       sessionManager.delete(session.id) match {
@@ -124,7 +130,7 @@ abstract class SessionServlet[S <: Session, R <: RecoveryMetadata](
       sessionManager.get(session.id) match {
         case Some(s) =>
           Await.ready(s.stop(), Duration.Inf)
-          Ok(Map("msg" -> "deleted"))
+          Ok(Map("msg" -> "killed"))
 
         case None =>
           NotFound(s"Session ${session.id} already stopped.")
@@ -133,9 +139,9 @@ abstract class SessionServlet[S <: Session, R <: RecoveryMetadata](
   }
 
   def tooManySessions(): Boolean = {
-    val totalChildProceses = RSCClientFactory.childProcesses().get() +
+    val totalChildProcesses = RSCClientFactory.childProcesses().get() +
       BatchSession.childProcesses.get()
-    totalChildProceses >= livyConf.getInt(LivyConf.SESSION_MAX_CREATION)
+    totalChildProcesses >= livyConf.getInt(LivyConf.SESSION_MAX_CREATION)
   }
 
   post("/") {

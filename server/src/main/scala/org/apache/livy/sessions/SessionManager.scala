@@ -21,17 +21,17 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.hadoop.fs.{FileContext, Path}
-
-import scala.collection.mutable
-import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.concurrent.duration.Duration
-import scala.reflect.ClassTag
-import scala.util.control.NonFatal
-import org.apache.livy.{LivyConf, Logging}
 import org.apache.livy.server.batch.{BatchRecoveryMetadata, BatchSession}
 import org.apache.livy.server.interactive.{InteractiveRecoveryMetadata, InteractiveSession, SessionHeartbeatWatchdog}
 import org.apache.livy.server.recovery.SessionStore
 import org.apache.livy.sessions.Session.RecoveryMetadata
+import org.apache.livy.{LivyConf, Logging}
+
+import scala.collection.mutable
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.reflect.ClassTag
+import scala.util.control.NonFatal
 
 object SessionManager {
   val SESSION_RECOVERY_MODE_OFF = "off"
@@ -113,8 +113,7 @@ class SessionManager[S <: Session, R <: RecoveryMetadata : ClassTag](
       try {
         sessionStore.remove(sessionType, session.id)
 
-        val logStoreEnabled = livyConf.getBoolean(LivyConf.LOGS_STORE_ENABLED)
-        if(logStoreEnabled) cleanLogStore(session)
+        if(livyConf.getBoolean(LivyConf.LOGS_STORE_ENABLED)) cleanLogStore(session)
 
         synchronized {
           sessions.remove(session.id)
@@ -136,18 +135,28 @@ class SessionManager[S <: Session, R <: RecoveryMetadata : ClassTag](
     }
   }
 
-  def cleanLogStore(session: S): Unit = try{
+  def cleanLogStore(session: S): Unit = try {
     val logRootPath = livyConf.get(LivyConf.LOGS_STORE_URL)
+    require(logRootPath.nonEmpty &&
+      livyConf.getInt(LivyConf.LOGS_STORE_BUFFER_SIZE) > 0 &&
+      livyConf.get(LivyConf.RECOVERY_MODE).equals("recovery") &&
+      livyConf.get(LivyConf.RECOVERY_STATE_STORE).equals("filesystem"),
+      "Not all log store config options are defined: [" +
+        "logRootPath should be nonEmpty, " +
+        "logBufferSize should be > 0, " +
+        "recoveryMode should be equals recovery, " +
+        "recoveryStateStore should be equals filesystem" +
+        "]")
+
     val LOG_FOLDER_PREFIX = "log_"
-    val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX${session.appId}")
+    val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX${session.appId.get}")
 
-    val fc : FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
+    val fc: FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
 
-    info(s"Removing logs for appId [ ${session.appId} ] path [$logFolderPath]")
-    fc.delete(logFolderPath, true)
-  }catch {
-    case Throwable =>
-      error("Exception was thrown during logs clean up: ", _)
+    info(s"Logs for appId [ ${session.appId.get} ] on path [ $logFolderPath ] have been removed [ ${fc.delete(logFolderPath, true)} ]")
+  } catch {
+    case e: Throwable =>
+      error("Exception was thrown during logs clean up: ", e)
   }
 
   def collectGarbage(): Future[Iterable[Unit]] = {
