@@ -46,7 +46,7 @@ object SessionServletSpec {
 
     override def logLines(): IndexedSeq[String] = IndexedSeq("log")
 
-    override def downloadLogs(): String = ""
+    override def downloadLogs(): IndexedSeq[String] = IndexedSeq()
   }
 
   case class MockSessionView(id: Int, owner: String, logs: Seq[String])

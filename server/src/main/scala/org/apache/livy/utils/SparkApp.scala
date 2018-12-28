@@ -118,5 +118,5 @@ object SparkApp {
 abstract class SparkApp {
   def kill(): Unit
   def log(): IndexedSeq[String]
-  def downloadLogs(): String = "" // TODO not to force overriding for existing apps
+  def downloadLogs(): IndexedSeq[String] = IndexedSeq() // TODO not to force overriding for existing apps
 }

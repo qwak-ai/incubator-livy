@@ -18,16 +18,15 @@
 package org.apache.livy.server
 
 import javax.servlet.http.HttpServletRequest
-
-import org.scalatra._
-import scala.concurrent._
-import scala.concurrent.duration._
-
-import org.apache.livy.{LivyConf, Logging}
 import org.apache.livy.rsc.RSCClientFactory
 import org.apache.livy.server.batch.BatchSession
-import org.apache.livy.sessions.{Session, SessionManager}
 import org.apache.livy.sessions.Session.RecoveryMetadata
+import org.apache.livy.sessions.{Session, SessionManager}
+import org.apache.livy.{LivyConf, Logging}
+import org.scalatra._
+
+import scala.concurrent._
+import scala.concurrent.duration._
 
 object SessionServlet extends Logging
 
@@ -107,8 +106,8 @@ abstract class SessionServlet[S <: Session, R <: RecoveryMetadata](
   }
 
   get("/:id/log/full") {
-    withViewAccessSession {
-      _.downloadLogs()
+    withViewAccessSession { session =>
+        Map("log" -> session.downloadLogs())
     }
   }
 

@@ -51,9 +51,28 @@ class UIServlet(val basePath: String, livyConf: LivyConf) extends ScalatraServle
       } else {
         "#"
       }
+      val fullLogLink = s"$basePath/ui/${sessionType.toLowerCase}/$id/log/full"
       <li><a href={basePath + "/ui"}>Sessions</a></li> ++
         <li><a href={sessionLink}>{sessionName}</a></li> ++
-        <li class="active"><a href="#">Log</a></li>
+        <li class="active"><a href="#">Log</a></li> ++
+        <li><a href={fullLogLink}>Full Log</a></li>
+    }
+  }
+
+  private case class FullLogPage(sessionType: String, id: Int) extends Page {
+    val sessionName: String = sessionType + " " + id
+    val name: String = sessionName + " Log"
+    override def getNavCrumbs: Seq[Node] = {
+      val sessionLink = if (sessionType == "Session") {
+        basePath + "/ui/session/" + id
+      } else {
+        "#"
+      }
+      val logLink = s"$basePath/ui/${sessionType.toLowerCase}/$id/log"
+      <li><a href={basePath + "/ui"}>Sessions</a></li> ++
+        <li><a href={sessionLink}>{sessionName}</a></li> ++
+        <li><a href={logLink}>Log</a></li> ++
+        <li class="active"><a href="#">Full Log</a></li>
     }
   }
 
@@ -148,5 +167,23 @@ class UIServlet(val basePath: String, livyConf: LivyConf) extends ScalatraServle
 
   get("/batch/:id/log") {
     getLogPage(LogPage("Batch", params("id").toInt))
+  }
+
+  private def getFullLogPage(page: FullLogPage): Seq[Node] = {
+    val content =
+      <div id="full-log-page">
+        <div id="full-session-log"></div>
+        <script src={basePath + "/static/js/full-session-log.js"}></script>
+      </div>
+
+    createPage(page, content)
+  }
+
+  get("/session/:id/log/full") {
+    getFullLogPage(FullLogPage("Session", params("id").toInt))
+  }
+
+  get("/batch/:id/log/full") {
+    getFullLogPage(FullLogPage("Batch", params("id").toInt))
   }
 }

@@ -88,6 +88,8 @@ object SparkKubernetesApp extends Logging {
 
 }
 
+final case class AllDone(private val message: String = "", private val cause: Throwable = None.orNull) extends Exception(message, cause)
+
 class SparkKubernetesApp private[utils](
     appTag: String,
     appIdOption: Option[String],
@@ -119,15 +121,14 @@ class SparkKubernetesApp private[utils](
       ("\nstderr: " +: (process.map(_.inputLines).getOrElse(ArrayBuffer.empty[String]) ++ process.map(_.errorLines).getOrElse(ArrayBuffer.empty[String]))) ++
       ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
 
-  override def downloadLogs(): String = {
+  override def downloadLogs(): IndexedSeq[String] = {
     val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX${appIdPromise.future.value.get.get}")
     val logFilePath = new Path(logFolderPath, LOG_FILE_NAME)
     val fc: FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
     val fsDataInputStream = fc.open(logFilePath)
-    val bs = Array.ofDim[Byte](fsDataInputStream.available)
-    fsDataInputStream.read(bs)
+    val result = scala.io.Source.fromInputStream(fsDataInputStream).getLines().toIndexedSeq
     fsDataInputStream.close()
-    new String(bs, StandardCharsets.UTF_8)
+    result
   }
 
   override def kill(): Unit = synchronized {
@@ -237,9 +238,6 @@ class SparkKubernetesApp private[utils](
       throw e
   }
 
-  // Exposed for unit test.
-  // TODO Instead of spawning a thread for every session, create a centralized thread and
-  // batch Kubernetes queries.
   private[utils] val kubernetesAppMonitorThread = Utils.startDaemonThread(s"kubernetesAppMonitorThread-$this") {
     try {
       // If appId is not known, query Kubernetes by appTag to get it.
@@ -319,6 +317,7 @@ class SparkKubernetesApp private[utils](
 
         Await.ready(appIdPromise.future, appLookupTimeout)
         Await.ready(namespacePromise.future, appLookupTimeout)
+        // TODO do not start logs consuming while driver pod is starting
         Await.ready(Future {
           while (state.equals(SparkApp.State.STARTING)) Clock.sleep(pollInterval.toMillis)
         }(ExecutionContext.global), appLookupTimeout)
@@ -346,9 +345,17 @@ class SparkKubernetesApp private[utils](
 
         try {
           logReader = getLogReader(lastTimestamp, driverPod)
-          // TODO review while clause
+          // TODO review while clause and other TODOs
           while (isRunning || kubernetesClient.getSparkDriverByAppTag(appTag).isDefined) {
             var line = logReader.readLine()
+
+            // skip repeated lines and lines without timestamps
+            if (lastTimestamp.isDefined) {
+              while (line != null && compareTimestamps(extractTimestamp(line), lastTimestamp.get) < 1) {
+                line = logReader.readLine()
+              }
+            }
+
             while (line != null) {
               logBuffer.append(line)
               if (logBuffer.length >= logBufferSize) flush()
@@ -358,9 +365,18 @@ class SparkKubernetesApp private[utils](
             logReader.close()
 
             Clock.sleep(pollInterval.toMillis * 10) // TODO add another config option ???
+
+            // TODO prettify, collect logs 1 more time and then stop thread
+            if (!isRunning) {
+              val state = mapKubernetesState(Try(kubernetesClient.getSparkDriverByAppTag(appTag).get.getStatus).toOption)
+              if (Seq(SparkApp.State.KILLED, SparkApp.State.FINISHED, SparkApp.State.FAILED).contains(state)) {
+                throw AllDone(s"App is finished with state [ $state ]. All logs for app [ $appTag ] are collected.")
+              }
+            }
             logReader = getLogReader(lastTimestamp, driverPod)
           }
         } catch {
+          case done: AllDone => info(done.getMessage)
           case e: Throwable => error(s"Error while logs consuming: ", e)
         } finally {
           if (logReader != null) {
@@ -377,11 +393,16 @@ class SparkKubernetesApp private[utils](
   }
 
   def incrementTimestamp(ts: String): String = DateTime.parse(ts).plusMillis(1).toString("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'")
+  def compareTimestamps(ts: Option[String], lastTs: String): Int = {
+    if (ts.isDefined) DateTime.parse(ts.get).compareTo(DateTime.parse(lastTs))
+    else -1 // skip lines without timestamps
+  }
+  def extractTimestamp(line: String): Option[String] = Try(line.split(" ")(0)).toOption
 
   def getLogReader(fromTimestamp: Option[String] = None, driverPod: PodResource[Pod, DoneablePod]): BufferedReader = {
     info(s"Reading logs for app [ $appTag ] in namespace [ $namespacePromise ] from [ ${fromTimestamp.getOrElse("beginning")} ]")
     val reader = new BufferedReader(
-      if (fromTimestamp.isDefined) driverPod.usingTimestamps.sinceTime(incrementTimestamp(fromTimestamp.get)).getLogReader
+      if (fromTimestamp.isDefined) driverPod.usingTimestamps.sinceTime(fromTimestamp.get).getLogReader
       else driverPod.usingTimestamps.getLogReader
     )
     reader
@@ -389,8 +410,9 @@ class SparkKubernetesApp private[utils](
 
   def writeMetadata(fc: FileContext, metadataPath: Path, timestamp: Option[String] = None, lastTimestamp: Option[String] = None): Option[String] =
     if (timestamp.isDefined && (lastTimestamp.isEmpty || !lastTimestamp.contains(timestamp.get))) {
-      writeLineToFile(fc, metadataPath, timestamp.get)
-      timestamp
+      val ts = incrementTimestamp(timestamp.get)
+      writeLineToFile(fc, metadataPath, ts)
+      Some(ts)
     } else {
       lastTimestamp
     }
@@ -404,7 +426,7 @@ class SparkKubernetesApp private[utils](
     })
     // because flush has no influence we should close writer and reopen it each time
     out.close()
-    val lastTimestamp = Try(buffer.last.split(" ")(0)).toOption
+    val lastTimestamp = Try(extractTimestamp(buffer.last).get).toOption
     buffer.clear()
     lastTimestamp
   }
