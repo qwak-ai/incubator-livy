@@ -376,7 +376,7 @@ class SparkKubernetesApp private[utils](
     }
   }
 
-  def incrementTimestamp(ts: String): String = DateTime.parse(ts).plusMillis(1).toString("yyyy-MM-dd'T'HH:mm:ss.SSS" + "Z")
+  def incrementTimestamp(ts: String): String = DateTime.parse(ts).plusMillis(1).toString("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'")
 
   def getLogReader(fromTimestamp: Option[String] = None, driverPod: PodResource[Pod, DoneablePod]): BufferedReader = {
     info(s"Reading logs for app [ $appTag ] in namespace [ $namespacePromise ] from [ ${fromTimestamp.getOrElse("beginning")} ]")
