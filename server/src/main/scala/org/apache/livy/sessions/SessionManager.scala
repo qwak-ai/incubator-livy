@@ -112,9 +112,6 @@ class SessionManager[S <: Session, R <: RecoveryMetadata : ClassTag](
     session.stop().map { case _ =>
       try {
         sessionStore.remove(sessionType, session.id)
-
-        if(livyConf.getBoolean(LivyConf.LOGS_STORE_ENABLED)) cleanLogStore(session)
-
         synchronized {
           sessions.remove(session.id)
         }
@@ -133,30 +130,6 @@ class SessionManager[S <: Session, R <: RecoveryMetadata : ClassTag](
         Await.ready(future, Duration.Inf)
       }
     }
-  }
-
-  def cleanLogStore(session: S): Unit = try {
-    val logRootPath = livyConf.get(LivyConf.LOGS_STORE_URL)
-    require(logRootPath.nonEmpty &&
-      livyConf.getInt(LivyConf.LOGS_STORE_BUFFER_SIZE) > 0 &&
-      livyConf.get(LivyConf.RECOVERY_MODE).equals("recovery") &&
-      livyConf.get(LivyConf.RECOVERY_STATE_STORE).equals("filesystem"),
-      "Not all log store config options are defined: [" +
-        "logRootPath should be nonEmpty, " +
-        "logBufferSize should be > 0, " +
-        "recoveryMode should be equals recovery, " +
-        "recoveryStateStore should be equals filesystem" +
-        "]")
-
-    val LOG_FOLDER_PREFIX = "log_"
-    val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX${session.appId.get}")
-
-    val fc: FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
-
-    info(s"Logs for appId [ ${session.appId.get} ] on path [ $logFolderPath ] have been removed [ ${fc.delete(logFolderPath, true)} ]")
-  } catch {
-    case e: Throwable =>
-      error("Exception was thrown during logs clean up: ", e)
   }
 
   def collectGarbage(): Future[Iterable[Unit]] = {

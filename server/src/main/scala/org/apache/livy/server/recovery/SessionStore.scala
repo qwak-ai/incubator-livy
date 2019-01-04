@@ -33,7 +33,8 @@ private[recovery] case class SessionManagerState(nextSessionId: Int)
  */
 class SessionStore(
     livyConf: LivyConf,
-    store: => StateStore = StateStore.get) // For unit testing.
+    stateStore: => StateStore = StateStore.get, // For unit testing.
+    logStore: => LogStore = LogStore.get) // For unit testing.
   extends Logging {
 
   private val STORE_VERSION: String = "v1"
@@ -43,23 +44,23 @@ class SessionStore(
    * @param m RecoveryMetadata for the session.
    */
   def save(sessionType: String, m: RecoveryMetadata): Unit = {
-    store.set(sessionPath(sessionType, m.id), m)
+    stateStore.set(sessionPath(sessionType, m.id), m)
   }
 
   def saveNextSessionId(sessionType: String, id: Int): Unit = {
-    store.set(sessionManagerPath(sessionType), SessionManagerState(id))
+    stateStore.set(sessionManagerPath(sessionType), SessionManagerState(id))
   }
 
   /**
    * Return all sessions stored in the store with specified session type.
    */
   def getAllSessions[T <: RecoveryMetadata : ClassTag](sessionType: String): Seq[Try[T]] = {
-    store.getChildren(sessionPath(sessionType))
+    stateStore.getChildren(sessionPath(sessionType))
       .flatMap { c => Try(c.toInt).toOption } // Ignore all non numerical keys
       .flatMap { id =>
         val p = sessionPath(sessionType, id)
         try {
-          store.get[T](p).map(Success(_))
+          stateStore.get[T](p).map(Success(_))
         } catch {
           case NonFatal(e) => Some(Failure(new IOException(s"Error getting session $p", e)))
         }
@@ -74,23 +75,36 @@ class SessionStore(
    * @throws Exception If SessionManagerState stored is corrupted, it throws an error.
    */
   def getNextSessionId(sessionType: String): Int = {
-    store.get[SessionManagerState](sessionManagerPath(sessionType))
+    stateStore.get[SessionManagerState](sessionManagerPath(sessionType))
       .map(_.nextSessionId).getOrElse(0)
+  }
+
+  def appendLog(data: Seq[String], sessionType: String, id: Int): Unit = {
+    logStore.save(data, sessionRootPath(sessionType, id))
+  }
+
+  def downloadLog(sessionType: String, id: Int): IndexedSeq[String] = {
+    logStore.get(sessionRootPath(sessionType, id))
   }
 
   /**
    * Remove a session from the state store.
    */
   def remove(sessionType: String, id: Int): Unit = {
-    store.remove(sessionPath(sessionType, id))
+    stateStore.remove(sessionRootPath(sessionType, id))
+    logStore.remove(sessionRootPath(sessionType, id))
   }
 
   private def sessionManagerPath(sessionType: String): String =
-    s"$STORE_VERSION/$sessionType/state"
+    s"${sessionPath(sessionType)}/state"
+
+  private def sessionRootPath(sessionType: String, id: Int): String =
+    s"${sessionPath(sessionType)}/$id"
 
   private def sessionPath(sessionType: String): String =
     s"$STORE_VERSION/$sessionType"
 
   private def sessionPath(sessionType: String, id: Int): String =
-    s"$STORE_VERSION/$sessionType/$id"
+    s"${sessionRootPath(sessionType, id)}/session"
+
 }

@@ -448,7 +448,7 @@ class InteractiveSession(
 
   override def logLines(): IndexedSeq[String] = app.map(_.log()).getOrElse(sessionLog)
 
-  override def downloadLogs(): IndexedSeq[String] = app.map(_.downloadLogs()).getOrElse(IndexedSeq())
+  override def downloadLogs(): IndexedSeq[String] = sessionStore.downloadLog(RECOVERY_SESSION_TYPE, id)
 
   override def recoveryMetadata: RecoveryMetadata =
     InteractiveRecoveryMetadata(
@@ -622,4 +622,7 @@ class InteractiveSession(
   }
 
   override def infoChanged(appInfo: AppInfo): Unit = { this.appInfo = appInfo }
+
+  override def logAppended(data: Seq[String]): Unit = { sessionStore.appendLog(data, RECOVERY_SESSION_TYPE, id) }
+
 }

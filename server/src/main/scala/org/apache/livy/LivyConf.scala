@@ -122,11 +122,13 @@ object LivyConf {
     */
   val RECOVERY_STATE_STORE_URL = Entry("livy.server.recovery.state-store.url", "")
 
-  val LOGS_STORE_ENABLED = Entry("livy.server.logs-store.enabled", false)
+  val RECOVERY_LOG_STORE = Entry("livy.server.recovery.log-store", "off")
 
-  val LOGS_STORE_URL = Entry("livy.server.logs-store.url", "")
+  val RECOVERY_LOG_STORE_URL = Entry("livy.server.recovery.log-store.url", "")
 
-  val LOGS_STORE_BUFFER_SIZE = Entry("livy.server.logs-store.buffer-size", 200)
+  val RECOVERY_LOG_STORE_BUFFER_SIZE = Entry("livy.server.recovery.log-store.buffer-size", 200)
+
+  val RECOVERY_LOG_STORE_POLL_INTERVAL = Entry("livy.server.recovery.log-store.poll-interval", "15s")
 
   // Livy will cache the max no of logs specified. 0 means don't cache the logs.
   val SPARK_LOGS_SIZE = Entry("livy.cache-log.size", 200)

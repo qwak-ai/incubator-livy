@@ -17,14 +17,13 @@
 
 package org.apache.livy.server.recovery
 
-import java.io.{FileNotFoundException, IOException}
+import java.io._
 import java.net.URI
 import java.util
 
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
 import org.apache.commons.io.IOUtils
-import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs._
 import org.apache.hadoop.fs.Options.{CreateOpts, Rename}
 import org.apache.hadoop.fs.permission.{FsAction, FsPermission}
@@ -48,10 +47,7 @@ class FileSystemStateStore(
   }
 
   private val fileContext: FileContext = mockFileContext.getOrElse {
-    val conf = new Configuration()
-    // conf.set("key", "value") <-- hadoop creds from livyConf
-    // TODO classes may change on hadoop libs upgrade
-    FileContext.getFileContext(fsUri, conf)
+    FileContext.getFileContext(fsUri, livyConf.hadoopConf)
   }
 
   {
@@ -127,7 +123,7 @@ class FileSystemStateStore(
   }
 
   override def remove(key: String): Unit = {
-    fileContext.delete(absPath(key), false)
+    fileContext.delete(absPath(key), true)
   }
 
   private def absPath(key: String): Path = new Path(fsUri.getPath(), key)

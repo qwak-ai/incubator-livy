@@ -166,7 +166,7 @@ class BatchSession(
 
   override def logLines(): IndexedSeq[String] = app.log()
 
-  override def downloadLogs(): IndexedSeq[String] = app.downloadLogs()
+  override def downloadLogs(): IndexedSeq[String] = sessionStore.downloadLog(RECOVERY_SESSION_TYPE, id)
 
   override def stopSession(): Unit = {
     app.kill()
@@ -194,6 +194,8 @@ class BatchSession(
   }
 
   override def infoChanged(appInfo: AppInfo): Unit = { this.appInfo = appInfo }
+
+  override def logAppended(data: Seq[String]): Unit = { sessionStore.appendLog(data, RECOVERY_SESSION_TYPE, id) }
 
   override def recoveryMetadata: RecoveryMetadata =
     BatchRecoveryMetadata(id, appId, appTag, owner, proxyUser)

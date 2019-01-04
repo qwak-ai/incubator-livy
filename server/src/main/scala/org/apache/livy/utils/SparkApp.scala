@@ -49,6 +49,9 @@ trait SparkAppListener {
 
   /** Fired when the app info is changed. */
   def infoChanged(appInfo: AppInfo): Unit = {}
+
+  /** Fired when new log appended. */
+  def logAppended(data: Seq[String])
 }
 
 /**
@@ -118,5 +121,4 @@ object SparkApp {
 abstract class SparkApp {
   def kill(): Unit
   def log(): IndexedSeq[String]
-  def downloadLogs(): IndexedSeq[String] = IndexedSeq() // TODO not to force overriding for existing apps
 }

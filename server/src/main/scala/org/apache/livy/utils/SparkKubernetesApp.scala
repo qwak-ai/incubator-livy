@@ -17,7 +17,6 @@
 package org.apache.livy.utils
 
 import java.io._
-import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.TimeoutException
 import java.{lang, util}
@@ -29,6 +28,7 @@ import io.fabric8.kubernetes.client._
 import io.fabric8.kubernetes.client.dsl.{FilterWatchListDeletable, PodResource}
 import org.apache.hadoop.fs.Options.CreateOpts
 import org.apache.hadoop.fs.{CreateFlag, FileContext, Path}
+import org.apache.livy.Utils.usingResource
 import org.apache.livy.server.batch.CreateBatchRequest
 import org.apache.livy.{LivyConf, Logging, Utils}
 import org.joda.time.{DateTime, DateTimeZone}
@@ -50,14 +50,13 @@ object SparkKubernetesApp extends Logging {
   private var appLookupTimeout: FiniteDuration = _
   private var pollInterval    : FiniteDuration = _
 
-  private var logStoreEnabled   : Boolean = _
-  private var logRootPath       : String  = _
-  private var logBufferSize     : Int     = _
-  private var recoveryMode      : String  = _
-  private var recoveryStateStore: String  = _
+  private var logRootPath       : String         = _
+  private var logBufferSize     : Int            = _
+  private var logPollInterval   : FiniteDuration = _
+  private var recoveryMode      : String         = _
+  private var recoveryStateStore: String         = _
+  private var recoveryLogStore  : String         = _
 
-  private val LOG_FOLDER_PREFIX      = "log_"
-  private val LOG_FILE_NAME          = "log"
   private val LOG_METADATA_FILE_NAME = "_METADATA"
 
   def init(livyConf: LivyConf): Unit = {
@@ -67,28 +66,28 @@ object SparkKubernetesApp extends Logging {
     appLookupTimeout = livyConf.getTimeAsMs(LivyConf.KUBERNETES_APP_LOOKUP_TIMEOUT).milliseconds
     pollInterval = livyConf.getTimeAsMs(LivyConf.KUBERNETES_POLL_INTERVAL).milliseconds
 
-    logStoreEnabled = livyConf.getBoolean(LivyConf.LOGS_STORE_ENABLED)
-    logRootPath = livyConf.get(LivyConf.LOGS_STORE_URL)
-    logBufferSize = livyConf.getInt(LivyConf.LOGS_STORE_BUFFER_SIZE)
+    logRootPath = livyConf.get(LivyConf.RECOVERY_LOG_STORE_URL)
+    logBufferSize = livyConf.getInt(LivyConf.RECOVERY_LOG_STORE_BUFFER_SIZE)
+    logPollInterval = livyConf.getTimeAsMs(LivyConf.RECOVERY_LOG_STORE_POLL_INTERVAL).milliseconds
     recoveryMode = livyConf.get(LivyConf.RECOVERY_MODE)
     recoveryStateStore = livyConf.get(LivyConf.RECOVERY_STATE_STORE)
+    recoveryLogStore = livyConf.get(LivyConf.RECOVERY_LOG_STORE)
 
     info(s"Initialized SparkKubernetesApp: " +
       s"master=[ ${livyConf.sparkMaster()} ], " +
       s"cacheLogSize=[ $cacheLogSize ], " +
       s"appLookupTimeout=[ $appLookupTimeout ], " +
       s"pollInterval=[ $pollInterval ], " +
-      s"logStoreEnabled=[ $logStoreEnabled ], " +
       s"logRootPath=[ $logRootPath ], " +
       s"logBufferSize=[ $logBufferSize ], " +
+      s"logPollInterval=[ $logPollInterval ], " +
       s"recoveryMode=[ $recoveryMode ], " +
-      s"recoveryStateStore=[ $recoveryStateStore ]"
+      s"recoveryStateStore=[ $recoveryStateStore ], " +
+      s"recoveryLogStore=[ $recoveryLogStore ]"
     )
   }
 
 }
-
-final case class AllDone(private val message: String = "", private val cause: Throwable = None.orNull) extends Exception(message, cause)
 
 class SparkKubernetesApp private[utils](
     appTag: String,
@@ -115,54 +114,149 @@ class SparkKubernetesApp private[utils](
   private var kubernetesDiagnostics: IndexedSeq[String] = IndexedSeq.empty[String]
   private var kubernetesAppLog     : IndexedSeq[String] = IndexedSeq.empty[String]
 
-  // TODO cache log $logSize, watch and persist full log
+  private[utils] val kubernetesAppMonitorThread = Utils.startDaemonThread(s"kubernetesAppMonitorThread-$this") {
+    try {
+      // If appId is not known, query Kubernetes by appTag to get it.
+      val appId = findAppId
+      appIdPromise.success(appId)
+      namespacePromise.success(findNamespace(appTag))
+
+      // TODO add check is running with lookupTimeout and kill if deadline exceeded
+
+      Thread.currentThread().setName(s"kubernetesAppMonitorThread-$appId")
+      listener.foreach(_.appIdKnown(appId.toString))
+
+      var appInfo = AppInfo()
+
+      while (isRunning) {
+        val sparkPods = kubernetesClient.getSparkPodsByAppTag(appTag)
+        val driverPodOption = sparkPods.find(isSparkDriver)
+
+        // Refresh application state
+        kubernetesDiagnostics = sparkPods
+          .sortBy(_.getMetadata.getName)
+          .map(buildSparkPodDiagnosticsPrettyString)
+          .flatMap(_.split("\n"))
+          .toIndexedSeq
+        changeState(mapKubernetesState(Try(driverPodOption.get.getStatus).toOption))
+
+        // Refresh app log cache
+        kubernetesAppLog = kubernetesClient.getPodLog(driverPodOption.get, cacheLogSize)
+        // Refresh AppInfo links
+        val latestAppInfo = {
+          val historyServerOption = Option(livyConf.get(LivyConf.HISTORY_SERVER_URL))
+          val historyServerInfo = if (historyServerOption.isDefined) Option(s"${historyServerOption.get}/history/$appId/jobs/") else None
+          val driverMetadata = Try(driverPodOption.get.getMetadata)
+          val sparkUiInfo = if (driverMetadata.isSuccess) {
+            val meta = driverMetadata.get
+            Option(s"${Option(livyConf.get(LivyConf.SERVER_PROXY_URL)).getOrElse("")}/${meta.getNamespace}/${meta.getName}-svc/jobs/")
+          } else {
+            None
+          }
+          AppInfo(sparkUiUrl = sparkUiInfo, historyServerUrl = historyServerInfo)
+        }
+        if (appInfo != latestAppInfo) {
+          listener.foreach(_.infoChanged(latestAppInfo))
+          appInfo = latestAppInfo
+        }
+        Clock.sleep(pollInterval.toMillis)
+      }
+    } catch {
+      case _: InterruptedException =>
+        kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
+        changeState(SparkApp.State.KILLED)
+      case e: Throwable            =>
+        error(s"Error whiling refreshing Kubernetes state", e)
+        kubernetesDiagnostics = ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
+        changeState(SparkApp.State.FAILED)
+    } finally {
+      info(s"Finished monitoring app [ $appTag ] in namespace [ ${namespacePromise.future.value} ]")
+    }
+  }
+
+  private[utils] val kubernetesLogMonitorThread = Utils.startDaemonThread(s"logMonitorThread-$this") {
+    import LogMonitoringUtils._
+    if (recoveryLogStore.equals("filesystem")) {
+      try {
+        Await.ready(appIdPromise.future, appLookupTimeout)
+        Await.ready(namespacePromise.future, appLookupTimeout)
+        // TODO do not start logs consuming while driver pod is starting
+        Await.ready(Future {
+          while (state.equals(SparkApp.State.STARTING)) Clock.sleep(pollInterval.toMillis)
+        }(ExecutionContext.global), appLookupTimeout)
+
+        val appId = appIdPromise.future.value.get.get
+
+        Thread.currentThread().setName(s"logMonitorThread-$appId")
+
+        val logFolderPath = new Path(logRootPath, s"log_$appId")
+        val metadataPath = new Path(logFolderPath, LOG_METADATA_FILE_NAME)
+        val fc = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
+        var lastTimestamp: Option[String] = readLineFromFile(fc, metadataPath)
+        val driverPod = kubernetesClient.getPodResource(kubernetesClient.getSparkDriverByAppTag(appTag).get)
+
+        while (isRunning) {
+          debug(s"Reading logs for app [ $appTag ] in namespace [ $namespacePromise ] from [ ${lastTimestamp.getOrElse("beginning")} ]")
+          lastTimestamp = collectLogs(fc, metadataPath, listener, lastTimestamp, driverPod, logBufferSize)
+          Clock.sleep(logPollInterval.toMillis)
+        }
+        if (kubernetesClient.getSparkDriverByAppTag(appTag).isDefined) {
+          debug(s"Reading final logs for app [ $appTag ] in namespace [ $namespacePromise ] from [ ${lastTimestamp.getOrElse("beginning")} ]")
+          collectLogs(fc, metadataPath, listener, lastTimestamp, driverPod, logBufferSize)
+        }
+      } catch {
+        case e: Throwable => error(s"Error during logs monitoring thread execution: ", e)
+      } finally {
+        info(s"Finished log monitoring app [ $appTag ] in namespace [ $namespacePromise ]")
+      }
+    }
+  }
+
   override def log(): IndexedSeq[String] =
     ("stdout: " +: kubernetesAppLog) ++
       ("\nstderr: " +: (process.map(_.inputLines).getOrElse(ArrayBuffer.empty[String]) ++ process.map(_.errorLines).getOrElse(ArrayBuffer.empty[String]))) ++
       ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
 
-  override def downloadLogs(): IndexedSeq[String] = {
-    val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX${appIdPromise.future.value.get.get}")
-    val logFilePath = new Path(logFolderPath, LOG_FILE_NAME)
-    val fc: FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
-    val fsDataInputStream = fc.open(logFilePath)
-    val result = scala.io.Source.fromInputStream(fsDataInputStream).getLines().toIndexedSeq
-    fsDataInputStream.close()
-    result
-  }
-
   override def kill(): Unit = synchronized {
     try {
       changeState(SparkApp.State.KILLED)
-
       kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
       kubernetesAppMonitorThread.join(pollInterval.toMillis * 2) // wait appMonitoring to finish gracefully
-      logMonitorThread.join(pollInterval.toMillis * 2) // wait logMonitoring to finish
-
+      kubernetesLogMonitorThread.join(logPollInterval.toMillis * 2) // wait logMonitoring to finish
     } catch {
-      // TODO analyse possible exceptions and handle them
       case _: TimeoutException | _: InterruptedException =>
         warn("Deleting a session while its Kubernetes application is not found")
         kubernetesAppMonitorThread.interrupt()
-      // interrupt other threads of this app
+        kubernetesLogMonitorThread.interrupt()
     } finally {
       process.foreach(_.destroy())
-      info(s"Attempt to delete namespace [ ${namespacePromise.future.value} ] for app $appTag")
+      debug(s"Attempt to delete namespace [ ${namespacePromise.future.value} ] for app $appTag")
       namespacePromise.future.onComplete(ns ⇒ {
         if (ns.isSuccess && kubernetesClient.containsNamespace(ns.get)) {
-          info(s"Spark on Kubernetes app namespace [ ${ns.get} ] was deleted: [ ${kubernetesClient.deleteNamespace(ns.get)} ]")
+          debug(s"Spark on Kubernetes app namespace [ ${ns.get} ] was deleted: [ ${kubernetesClient.deleteNamespace(ns.get)} ]")
         } else {
-          info(s"Namespace [ $ns ] is not found for app [ $appTag ]")
+          debug(s"Namespace [ $ns ] is not found for app [ $appTag ]")
         }
       })(ExecutionContext.global)
+
+      val appId = Try(appIdOption.getOrElse(appIdPromise.future.value.get.get)).toOption
+      if (appId.isDefined) {
+        val logFolderPath = new Path(logRootPath, s"log_${appId.get}")
+        val fc = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
+        debug(s"Log metadata for app [ $appTag ] on path [ $logFolderPath ] is deleted [ ${fc.delete(logFolderPath, true)} ]")
+      }
     }
   }
 
-  private def changeState(newState: SparkApp.State.Value): Unit = {
-    if (state != newState) {
-      listener.foreach(_.stateChanged(state, newState))
-      state = newState
+  private def findAppId: String = try {
+    appIdOption.getOrElse {
+      val deadline = appLookupTimeout.fromNow
+      getAppIdFromTag(appTag, pollInterval, deadline).get
     }
+  } catch {
+    case e: Exception =>
+      appIdPromise.failure(e)
+      throw e
   }
 
   private def getAppIdFromTag(
@@ -183,6 +277,15 @@ class SparkKubernetesApp private[utils](
         getAppIdFromTag(appTag, pollInterval, deadline)
       }
     }
+  }
+
+  private def findNamespace(appTag: String): String = try {
+    val deadline = appLookupTimeout.fromNow
+    getNamespaceFromTag(appTag, pollInterval, deadline)
+  } catch {
+    case e: Exception =>
+      namespacePromise.failure(e)
+      throw e
   }
 
   private def getNamespaceFromTag(
@@ -206,277 +309,110 @@ class SparkKubernetesApp private[utils](
 
   private def isRunning: Boolean = runningStates.contains(state)
 
+  private def changeState(newState: SparkApp.State.Value): Unit = {
+    if (state != newState) {
+      listener.foreach(_.stateChanged(state, newState))
+      state = newState
+    }
+  }
+
   // Exposed for unit test.
   private[utils] def mapKubernetesState(kubernetesPodStatus: Option[PodStatus]): SparkApp.State.Value = {
     val state = Try(kubernetesPodStatus.get.getPhase.toLowerCase).getOrElse("error")
     state match {
       case "pending" | "containercreating" => SparkApp.State.STARTING
       case "running"                       => SparkApp.State.RUNNING
-      case "completed"                     => SparkApp.State.FINISHED
+      case "completed" | "succeeded"       => SparkApp.State.FINISHED
       case "failed" | "error"              => SparkApp.State.FAILED
       case _                               => SparkApp.State.KILLED
     }
   }
 
-  def findAppId: String = try {
-    appIdOption.getOrElse {
-      val deadline = appLookupTimeout.fromNow
-      getAppIdFromTag(appTag, pollInterval, deadline).get
-    }
-  } catch {
-    case e: Exception =>
-      appIdPromise.failure(e)
-      throw e
-  }
+}
 
-  def findNamespace(appTag: String): String = try {
-    val deadline = appLookupTimeout.fromNow
-    getNamespaceFromTag(appTag, pollInterval, deadline)
-  } catch {
-    case e: Exception =>
-      namespacePromise.failure(e)
-      throw e
-  }
+object LogMonitoringUtils {
 
-  private[utils] val kubernetesAppMonitorThread = Utils.startDaemonThread(s"kubernetesAppMonitorThread-$this") {
-    try {
-      // If appId is not known, query Kubernetes by appTag to get it.
-      val appId = findAppId
-      appIdPromise.success(appId)
-      namespacePromise.success(findNamespace(appTag))
-
-      // TODO add check is running with lookupTimeout and kill if deadline exceeded
-
-      Thread.currentThread().setName(s"kubernetesAppMonitorThread-$appId")
-      listener.foreach(_.appIdKnown(appId.toString))
-
-      var appInfo = AppInfo()
-
-      while (isRunning) {
-        try {
-
-          val sparkPods = kubernetesClient.getSparkPodsByAppTag(appTag)
-          val driverPodOption = sparkPods.find(isSparkDriver)
-
-          // Refresh application state
-          kubernetesDiagnostics = sparkPods
-            .sortBy(_.getMetadata.getName)
-            .map(buildSparkPodDiagnosticsPrettyString)
-            .flatMap(_.split("\n"))
-            .toIndexedSeq
-          changeState(mapKubernetesState(Try(driverPodOption.get.getStatus).toOption))
-
-          // Refresh app log cache
-          kubernetesAppLog = kubernetesClient.getPodLog(driverPodOption.get, cacheLogSize)
-          // Refresh AppInfo links
-          val latestAppInfo = {
-            val historyServerOption = Option(livyConf.get(LivyConf.HISTORY_SERVER_URL))
-            val historyServerInfo = if (historyServerOption.isDefined) Option(s"${historyServerOption.get}/history/$appId/jobs/") else None
-            val driverMetadata = Try(driverPodOption.get.getMetadata)
-            val sparkUiInfo = if (driverMetadata.isSuccess) {
-              val meta = driverMetadata.get
-              Option(s"${Option(livyConf.get(LivyConf.SERVER_PROXY_URL)).getOrElse("")}/${meta.getNamespace}/${meta.getName}-svc/jobs/")
-            } else {
-              None
-            }
-            AppInfo(sparkUiUrl = sparkUiInfo, historyServerUrl = historyServerInfo)
-          }
-          if (appInfo != latestAppInfo) {
-            listener.foreach(_.infoChanged(latestAppInfo))
-            appInfo = latestAppInfo
-          }
-          Clock.sleep(pollInterval.toMillis)
-        } catch {
-          // This exception might be thrown during app is starting up. It's transient.
-          case e: Throwable => throw e
-        }
-      }
-    } catch {
-      case _: InterruptedException =>
-        kubernetesDiagnostics = ArrayBuffer("Session stopped by user.")
-        changeState(SparkApp.State.KILLED)
-      case e: Throwable            =>
-        error(s"Error whiling refreshing Kubernetes state", e)
-        kubernetesDiagnostics = ArrayBuffer(e.toString +: e.getStackTrace.map(_.toString): _*)
-        changeState(SparkApp.State.FAILED)
-    } finally {
-      info(s"Finished monitoring app [ $appTag ] in namespace [ ${namespacePromise.future.value} ]")
-    }
-  }
-
-  private[utils] val logMonitorThread = Utils.startDaemonThread(s"logMonitorThread-$this") {
-    if (logStoreEnabled) {
-      try {
-        require(logRootPath.nonEmpty && logBufferSize > 0 && recoveryMode.equals("recovery") && recoveryStateStore.equals("filesystem"),
-          "Not all log store config options are defined: [" +
-            "logRootPath should be nonEmpty, " +
-            "logBufferSize should be > 0, " +
-            "recoveryMode should be equals recovery, " +
-            "recoveryStateStore should be equals filesystem" +
-            "]")
-
-        Await.ready(appIdPromise.future, appLookupTimeout)
-        Await.ready(namespacePromise.future, appLookupTimeout)
-        // TODO do not start logs consuming while driver pod is starting
-        Await.ready(Future {
-          while (state.equals(SparkApp.State.STARTING)) Clock.sleep(pollInterval.toMillis)
-        }(ExecutionContext.global), appLookupTimeout)
-
-        val appId = appIdPromise.future.value.get.get
-
-        Thread.currentThread().setName(s"logMonitorThread-$appId")
-
-        val logFolderPath = new Path(logRootPath, s"$LOG_FOLDER_PREFIX$appId")
-        val logFilePath = new Path(logFolderPath, LOG_FILE_NAME)
-        val metadataPath = new Path(logFolderPath, LOG_METADATA_FILE_NAME)
-
-        val fc: FileContext = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
-
-        val logBuffer = new ListBuffer[String]()
-        var lastTimestamp: Option[String] = readLineFromFile(fc, metadataPath)
-
-        val driverPod = kubernetesClient.getPodResource(kubernetesClient.getSparkDriverByAppTag(appTag).get)
-
-        def flush(): Unit = {
-          lastTimestamp = writeMetadata(fc, metadataPath, flushBuffer(logBuffer, fc, logFilePath), lastTimestamp)
-        }
-
-        var logReader: BufferedReader = null
-
-        try {
-          logReader = getLogReader(lastTimestamp, driverPod)
-          // TODO review while clause and other TODOs
-          while (isRunning || kubernetesClient.getSparkDriverByAppTag(appTag).isDefined) {
-            var line = logReader.readLine()
-
-            // skip repeated lines and lines without timestamps
-            if (lastTimestamp.isDefined) {
-              while (line != null && compareTimestamps(extractTimestamp(line), lastTimestamp.get) < 1) {
-                line = logReader.readLine()
-              }
-            }
-
-            while (line != null) {
-              logBuffer.append(line)
-              if (logBuffer.length >= logBufferSize) flush()
-              line = logReader.readLine()
-            }
-            flush()
-            logReader.close()
-
-            Clock.sleep(pollInterval.toMillis * 10) // TODO add another config option ???
-
-            // TODO prettify, collect logs 1 more time and then stop thread
-            if (!isRunning) {
-              val state = mapKubernetesState(Try(kubernetesClient.getSparkDriverByAppTag(appTag).get.getStatus).toOption)
-              if (Seq(SparkApp.State.KILLED, SparkApp.State.FINISHED, SparkApp.State.FAILED).contains(state)) {
-                throw AllDone(s"App is finished with state [ $state ]. All logs for app [ $appTag ] are collected.")
-              }
-            }
-            logReader = getLogReader(lastTimestamp, driverPod)
-          }
-        } catch {
-          case done: AllDone => info(done.getMessage)
-          case e: Throwable => error(s"Error while logs consuming: ", e)
-        } finally {
-          if (logReader != null) {
-            flush()
-            logReader.close()
+  def collectLogs(
+      fc: FileContext,
+      metadataPath: Path,
+      listener: Option[SparkAppListener],
+      lastTimestamp: Option[String],
+      driverPod: PodResource[Pod, DoneablePod],
+      logBufferSize: Int
+  ): Option[String] = {
+    var ts = lastTimestamp
+    val logBuffer = ListBuffer[String]()
+    usingResource(getLogReader(lastTimestamp, driverPod)) {
+      reader => {
+        var line = reader.readLine()
+        // skip repeated lines and lines without timestamps
+        if (lastTimestamp.isDefined) {
+          while (line != null && compareTimestamps(extractTimestamp(line), lastTimestamp.get) < 1) {
+            line = reader.readLine()
           }
         }
-      } catch {
-        case e: Throwable => error(s"Error during logs monitoring thread execution: ", e)
-      } finally {
-        info(s"Finished log monitoring app [ $appTag ] in namespace [ $namespacePromise ]")
+        while (line != null) {
+          logBuffer.append(line)
+          if (logBuffer.length >= logBufferSize) ts = writeMetadata(fc, metadataPath, flushBuffer(logBuffer, listener), ts)
+          line = reader.readLine()
+        }
+        ts = writeMetadata(fc, metadataPath, flushBuffer(logBuffer, listener), ts)
       }
     }
+    ts
   }
 
-  def incrementTimestamp(ts: String): String = DateTime.parse(ts).plusMillis(1).toString("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'")
+  def extractTimestamp(line: String): Option[String] = {
+    Try(line.split(" ")(0)).toOption
+  }
+
+  def incrementTimestamp(ts: String): String = {
+    DateTime.parse(ts).plusMillis(1).toString("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'")
+  }
+
   def compareTimestamps(ts: Option[String], lastTs: String): Int = {
     if (ts.isDefined) DateTime.parse(ts.get).compareTo(DateTime.parse(lastTs))
     else -1 // skip lines without timestamps
   }
-  def extractTimestamp(line: String): Option[String] = Try(line.split(" ")(0)).toOption
 
   def getLogReader(fromTimestamp: Option[String] = None, driverPod: PodResource[Pod, DoneablePod]): BufferedReader = {
-    info(s"Reading logs for app [ $appTag ] in namespace [ $namespacePromise ] from [ ${fromTimestamp.getOrElse("beginning")} ]")
-    val reader = new BufferedReader(
+    new BufferedReader(
       if (fromTimestamp.isDefined) driverPod.usingTimestamps.sinceTime(fromTimestamp.get).getLogReader
       else driverPod.usingTimestamps.getLogReader
     )
-    reader
   }
 
-  def writeMetadata(fc: FileContext, metadataPath: Path, timestamp: Option[String] = None, lastTimestamp: Option[String] = None): Option[String] =
-    if (timestamp.isDefined && (lastTimestamp.isEmpty || !lastTimestamp.contains(timestamp.get))) {
-      val ts = incrementTimestamp(timestamp.get)
-      writeLineToFile(fc, metadataPath, ts)
-      Some(ts)
-    } else {
-      lastTimestamp
-    }
-
-  def flushBuffer(buffer: ListBuffer[String], fc: FileContext, logFilePath: Path): Option[String] = {
-    if (buffer == null || buffer.isEmpty) return None
-    val out = new BufferedWriter(new OutputStreamWriter(fc.create(logFilePath, util.EnumSet.of(CreateFlag.CREATE, CreateFlag.APPEND), CreateOpts.createParent())))
-    buffer.foreach(x => {
-      out.write(x)
-      out.newLine()
-    })
-    // because flush has no influence we should close writer and reopen it each time
-    out.close()
+  def flushBuffer(buffer: ListBuffer[String], listener: Option[SparkAppListener]): Option[String] = {
+    listener.foreach(_.logAppended(buffer))
     val lastTimestamp = Try(extractTimestamp(buffer.last).get).toOption
     buffer.clear()
     lastTimestamp
   }
 
-  def writeLineToFile(fc: FileContext, path: Path, content: String): Unit = {
-    val createFlags = util.EnumSet.of(CreateFlag.CREATE, CreateFlag.OVERWRITE)
-    val metadataOut = fc.create(path, createFlags, CreateOpts.createParent())
-    metadataOut.write(content.getBytes)
-    metadataOut.close()
-  }
-
-  def readLineFromFile(fc: FileContext, path: Path): Option[String] = {
-    if (fc.util.exists(path)) {
-      val metadataIn = new BufferedReader(new InputStreamReader(fc.open(path)))
-      val content = metadataIn.readLine()
-      metadataIn.close()
-      Option(content)
+  def writeMetadata(fc: FileContext, metadataPath: Path, timestamp: Option[String], lastTimestamp: Option[String]): Option[String] =
+    if (timestamp.isDefined && (lastTimestamp.isEmpty || !lastTimestamp.contains(timestamp.get))) {
+      val ts = incrementTimestamp(timestamp.get)
+      overwriteFile(fc, metadataPath, ts)
+      Some(ts)
     } else {
-      None
+      lastTimestamp
+    }
+
+  def overwriteFile(fileContext: FileContext, path: Path, content: String): Unit = {
+    val createFlags = util.EnumSet.of(CreateFlag.CREATE, CreateFlag.OVERWRITE)
+    usingResource(fileContext.create(path, createFlags, CreateOpts.createParent())) {
+      writer => writer.write(content.getBytes)
     }
   }
 
-  def buildSparkPodDiagnosticsPrettyString(pod: Pod): String = {
-    def printMap(map: mutable.Map[_, _]): String = map.map {
-      case (key, value) ⇒ s"$key=$value"
-    }.mkString(", ")
-
-    s"${pod.getMetadata.getName}.${pod.getMetadata.getNamespace}:" +
-      s"\n\tnode: ${pod.getSpec.getNodeName}" +
-      s"\n\thostname: ${pod.getSpec.getHostname}" +
-      s"\n\tpodIp: ${pod.getStatus.getPodIP}" +
-      s"\n\tstartTime: ${pod.getStatus.getStartTime}" +
-      s"\n\tphase: ${pod.getStatus.getPhase}" +
-      s"\n\treason: ${pod.getStatus.getReason}" +
-      s"\n\tmessage: ${pod.getStatus.getMessage}" +
-      s"\n\tlabels: ${printMap(pod.getMetadata.getLabels.asScala)}" +
-      s"\n\tcontainers:" +
-      s"\n\t\t${
-        pod.getSpec.getContainers.asScala.map(container ⇒
-          s"${container.getName}:" +
-            s"\n\t\t\timage: ${container.getImage}" +
-            s"\n\t\t\trequests: ${printMap(container.getResources.getRequests.asScala)}" +
-            s"\n\t\t\tlimits: ${printMap(container.getResources.getLimits.asScala)}" +
-            s"\n\t\t\tcommand: ${container.getCommand} ${container.getArgs}"
-        ).mkString("\n\t\t")
-      }" +
-      s"\n\tconditions:" +
-      s"\n\t\t${pod.getStatus.getConditions.asScala.mkString("\n\t\t")}"
-  }
-
+  def readLineFromFile(fileContext: FileContext, path: Path): Option[String] =
+    if (fileContext.util.exists(path) && fileContext.getFileStatus(path).isFile) {
+      usingResource(new BufferedReader(new InputStreamReader(fileContext.open(path)))) {
+        reader => Some(reader.readLine())
+      }
+    } else {
+      None
+    }
 }
 
 object KubernetesExtensions {
@@ -544,6 +480,10 @@ object KubernetesUtils extends Logging {
 
   import KubernetesConstants._
 
+  implicit class OptionString(val string: String) extends AnyVal {
+    def toOption: Option[String] = if (string == null || string.isEmpty) None else Option(string)
+  }
+
   def formatAppId(appId: String): String = {
     val formatted = s"stub.$appId".split("\\.").last.toLowerCase().replaceAll("[^0-9a-z]", "")
     val shortened = if (formatted.length > 32) formatted.substring(0, 32) else formatted
@@ -608,8 +548,32 @@ object KubernetesUtils extends Logging {
   def isSparkDriverFinished(phase: String): Boolean =
     Try(Seq("succeeded", "failed").contains(phase.toLowerCase) || phase.toLowerCase.contains("backoff")).getOrElse(false)
 
-  implicit class OptionString(val string: String) extends AnyVal {
-    def toOption: Option[String] = if (string == null || string.isEmpty) None else Option(string)
+  def buildSparkPodDiagnosticsPrettyString(pod: Pod): String = {
+    def printMap(map: mutable.Map[_, _]): String = map.map {
+      case (key, value) ⇒ s"$key=$value"
+    }.mkString(", ")
+
+    s"${pod.getMetadata.getName}.${pod.getMetadata.getNamespace}:" +
+      s"\n\tnode: ${pod.getSpec.getNodeName}" +
+      s"\n\thostname: ${pod.getSpec.getHostname}" +
+      s"\n\tpodIp: ${pod.getStatus.getPodIP}" +
+      s"\n\tstartTime: ${pod.getStatus.getStartTime}" +
+      s"\n\tphase: ${pod.getStatus.getPhase}" +
+      s"\n\treason: ${pod.getStatus.getReason}" +
+      s"\n\tmessage: ${pod.getStatus.getMessage}" +
+      s"\n\tlabels: ${printMap(pod.getMetadata.getLabels.asScala)}" +
+      s"\n\tcontainers:" +
+      s"\n\t\t${
+        pod.getSpec.getContainers.asScala.map(container ⇒
+          s"${container.getName}:" +
+            s"\n\t\t\timage: ${container.getImage}" +
+            s"\n\t\t\trequests: ${printMap(container.getResources.getRequests.asScala)}" +
+            s"\n\t\t\tlimits: ${printMap(container.getResources.getLimits.asScala)}" +
+            s"\n\t\t\tcommand: ${container.getCommand} ${container.getArgs}"
+        ).mkString("\n\t\t")
+      }" +
+      s"\n\tconditions:" +
+      s"\n\t\t${pod.getStatus.getConditions.asScala.mkString("\n\t\t")}"
   }
 
 }
