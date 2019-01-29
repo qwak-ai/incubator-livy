@@ -19,7 +19,9 @@ package org.apache.livy.rsc.rpc;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.*;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -62,9 +64,6 @@ public abstract class RpcDispatcher extends SimpleChannelInboundHandler<Object> 
 
   @Override
   protected final void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
-    for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
-      System.out.println(ste);
-    }
     if (lastHeader == null) {
       if (!(msg instanceof Rpc.MessageHeader)) {
         LOG.warn("[{}] Expected RPC header, got {} instead.", name(),
@@ -73,7 +72,7 @@ public abstract class RpcDispatcher extends SimpleChannelInboundHandler<Object> 
       }
       lastHeader = (Rpc.MessageHeader) msg;
     } else {
-      LOG.info("[{}] Received RPC message: type={} id={} payload={}", name(),
+      LOG.debug("[{}] Received RPC message: type={} id={} payload={}", name(),
         lastHeader.type, lastHeader.id, msg != null ? msg.getClass().getName() : null);
       try {
         switch (lastHeader.type) {

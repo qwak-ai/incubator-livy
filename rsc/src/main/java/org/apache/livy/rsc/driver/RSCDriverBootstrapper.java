@@ -53,7 +53,7 @@ public final class RSCDriverBootstrapper {
       if (!fileName.startsWith("livyConf") && fileName.endsWith("properties")) {
         throw new IllegalArgumentException("File name " + fileName + "is not a legal file name.");
       }
-      System.out.println("Reading property file: " + propertyFile.getAbsolutePath());
+
       Reader r = new InputStreamReader(new FileInputStream(propertyFile), UTF_8);
       try {
         props.load(r);
@@ -72,11 +72,9 @@ public final class RSCDriverBootstrapper {
     for (String key : props.stringPropertyNames()) {
       String value = props.getProperty(key);
       if (key.startsWith(RSCConf.LIVY_SPARK_PREFIX)) {
-        System.out.println("Setting " + key + " = " + value);
         livyConf.set(key.substring(RSCConf.LIVY_SPARK_PREFIX.length()), value);
         props.remove(key);
       } else if (key.startsWith(RSCConf.SPARK_CONF_PREFIX)) {
-        System.out.println("Setting " + key + " = " + value);
         conf.set(key, value);
       }
     }
@@ -85,7 +83,6 @@ public final class RSCDriverBootstrapper {
     if (driverClass == null) {
       driverClass = RSCDriver.class.getName();
     }
-    System.out.println("Launching driver: " + driverClass);
 
     RSCDriver driver = (RSCDriver) Thread.currentThread()
       .getContextClassLoader()
