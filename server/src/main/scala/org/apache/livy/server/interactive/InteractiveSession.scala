@@ -75,8 +75,17 @@ object InteractiveSession extends Logging {
     val appTag = s"livy-session-$id-${Random.alphanumeric.take(8).mkString}"
 
     val client = mockClient.orElse {
+
+      val masterSpecificConf = if (livyConf.isRunningOnKubernetes) {
+        val namespace = KubernetesUtils.generateKubernetesNamespace(appTag.toLowerCase, livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX), request.conf)
+        KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace)
+        KubernetesUtils.prepareKubernetesSpecificConf(namespace, request)
+      } else {
+        Map()
+      }
+
       val conf = SparkApp.prepareSparkConf(appTag, livyConf, prepareConf(
-        request.conf, request.jars, request.files, request.archives, request.pyFiles, livyConf))
+        request.conf ++ masterSpecificConf, request.jars, request.files, request.archives, request.pyFiles, livyConf))
 
       val builderProperties = prepareBuilderProp(conf, request.kind, livyConf)
 

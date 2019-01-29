@@ -149,12 +149,13 @@ public class RSCDriver extends BaseProtocol {
     String secret = livyConf.get(CLIENT_SECRET);
     Utils.checkArgument(secret != null, "No secret provided.");
 
-    String launcherAddress = livyConf.get(LAUNCHER_ADDRESS);
+    String launcherAddress = conf.get("spark.driver.host"); // LAUNCHER_ADDRESS
     Utils.checkArgument(launcherAddress != null, "Missing launcher address.");
     int launcherPort = livyConf.getInt(LAUNCHER_PORT);
     Utils.checkArgument(launcherPort > 0, "Missing launcher port.");
 
     LOG.info("Connecting to: {}:{}", launcherAddress, launcherPort);
+    LOG.info("clientId/secret: {}/{}", clientId, secret);
 
     // We need to unset this configuration since it doesn't really apply for the driver side.
     // If the driver runs on a multi-homed machine, this can lead to issues where the Livy
@@ -175,7 +176,7 @@ public class RSCDriver extends BaseProtocol {
       }
     }
 
-    // Bring up the RpcServer an register the secret provided by the Livy server as a client.
+    // Bring up the RpcServer and register the secret provided by the Livy server as a client.
     LOG.info("Starting RPC server...");
     this.server = new RpcServer(livyConf);
     server.registerClient(clientId, secret, new RpcServer.ClientCallback() {
@@ -190,10 +191,12 @@ public class RSCDriver extends BaseProtocol {
         onClientAuthenticated(client);
       }
     });
+    LOG.debug("RPC Server started: " + server.getAddress() + ":" + server.getPort());
 
     // The RPC library takes care of timing out this.
     Rpc callbackRpc = Rpc.createClient(livyConf, server.getEventLoopGroup(),
       launcherAddress, launcherPort, clientId, secret, this).get();
+    LOG.debug("callbackRpc created: " + callbackRpc.getChannel().localAddress() + " >:< " + callbackRpc.getChannel().remoteAddress());
     try {
       callbackRpc.call(new RemoteDriverAddress(server.getAddress(), server.getPort())).get(
         livyConf.getTimeAsMs(RPC_CLIENT_HANDSHAKE_TIMEOUT), TimeUnit.MILLISECONDS);

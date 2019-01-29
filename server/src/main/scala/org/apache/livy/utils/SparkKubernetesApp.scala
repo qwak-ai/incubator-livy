@@ -30,6 +30,7 @@ import org.apache.hadoop.fs.Options.CreateOpts
 import org.apache.hadoop.fs.{CreateFlag, FileContext, Path}
 import org.apache.livy.Utils.usingResource
 import org.apache.livy.server.batch.CreateBatchRequest
+import org.apache.livy.server.interactive.CreateInteractiveRequest
 import org.apache.livy.{LivyConf, Logging, Utils}
 import org.joda.time.{DateTime, DateTimeZone}
 
@@ -528,6 +529,11 @@ object KubernetesUtils extends Logging {
 
   def prepareKubernetesSpecificConf(namespace: String, request: CreateBatchRequest): Map[String, String] = Map(
     "spark.app.id" → getAppId(Try(request.conf("spark.app.id")).toOption, request.name, request.className),
+    "spark.kubernetes.namespace" → namespace
+  )
+
+  def prepareKubernetesSpecificConf(namespace: String, request: CreateInteractiveRequest): Map[String, String] = Map(
+    "spark.app.id" → getAppId(Try(request.conf("spark.app.id")).toOption, request.name, None),
     "spark.kubernetes.namespace" → namespace
   )
 
