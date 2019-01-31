@@ -43,8 +43,8 @@ function anchorLink(link, inner) {
   return '<a href="' + link + '">' + inner + "</a>";
 }
 
-function killLink(id, inner) {
-  return '<input id="killjob" type="button" value="' + inner + '" onclick="deleteConfirm(' + id + ');" />';
+function killLink(type, id, inner) {
+  return '<input id="killjob" type="button" value="' + inner + '" onclick="deleteConfirm(' type + "," + id + ');" />';
 }
 
 function historyServerLink(session) {
@@ -58,7 +58,7 @@ function historyServerLink(session) {
 
 function sparkUiLink(session) {
   var sparkUiUrl = session.appInfo.sparkUiUrl;
-  if (sparkUiUrl != null && session.state == "running") {
+  if (sparkUiUrl != null && session.state == "running" || session.state == "idle" || session.state == "busy") {
     return anchorLink(sparkUiUrl, session.appId + " UI")
   } else {
     return session.appId;
@@ -82,7 +82,7 @@ function logLinks(session, kind) {
 
 function appIdLink(session) {
   var appUiUrl = session.appInfo.sparkUiUrl;
-  if (session.state == "running") {
+  if (session.state == "running" || session.state == "idle" || session.state == "busy") {
     return sparkUiLink(session);
   } else {
     return historyServerLink(session);

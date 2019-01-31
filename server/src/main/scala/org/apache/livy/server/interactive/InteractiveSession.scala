@@ -474,6 +474,7 @@ class InteractiveSession(
   }
 
   override def stopSession(): Unit = {
+    var killed = false
     try {
       transition(SessionState.ShuttingDown)
       sessionStore.remove(RECOVERY_SESSION_TYPE, id)
@@ -484,7 +485,13 @@ class InteractiveSession(
           warn(s"Failed to stop RSCDriver. Killing it...")
           _.kill()
         }
+        killed = true
     } finally {
+      app.foreach( a ⇒ {
+        if (a.isInstanceOf[SparkKubernetesApp] && !killed) {
+          a.kill()
+        }
+      })
       transition(SessionState.Dead())
     }
   }

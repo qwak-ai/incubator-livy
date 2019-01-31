@@ -234,7 +234,8 @@ class SparkKubernetesApp private[utils](
       debug(s"Attempt to delete namespace [ ${namespacePromise.future.value} ] for app $appTag")
       namespacePromise.future.onComplete(ns ⇒ {
         if (ns.isSuccess && kubernetesClient.containsNamespace(ns.get)) {
-          debug(s"Spark on Kubernetes app namespace [ ${ns.get} ] was deleted: [ ${kubernetesClient.deleteNamespace(ns.get)} ]")
+          val wasDeleted = kubernetesClient.deleteNamespace(ns.get)
+          debug(s"Spark on Kubernetes app namespace [ ${ns.get} ] was deleted: [ $wasDeleted ]")
         } else {
           debug(s"Namespace [ $ns ] is not found for app [ $appTag ]")
         }
@@ -244,7 +245,8 @@ class SparkKubernetesApp private[utils](
       if (appId.isDefined) {
         val logFolderPath = new Path(logRootPath, s"log_${appId.get}")
         val fc = FileContext.getFileContext(logFolderPath.toUri, livyConf.hadoopConf)
-        debug(s"Log metadata for app [ $appTag ] on path [ $logFolderPath ] is deleted [ ${fc.delete(logFolderPath, true)} ]")
+        val wasDeleted = fc.delete(logFolderPath, true)
+        debug(s"Log metadata for app [ $appTag ] on path [ $logFolderPath ] is deleted [ $wasDeleted ]")
       }
     }
   }
@@ -437,7 +439,13 @@ object KubernetesExtensions {
 
     def containsNamespace(name: String): Boolean = client.namespaces.list.getItems.asScala.map(_.getMetadata.getName).contains(name)
 
-    def deleteNamespace(name: String): Boolean = client.namespaces.delete(buildNamespace(name))
+    def deleteNamespace(name: String): Boolean = {
+      val phase = Try(client.namespaces.list.getItems.asScala
+        .find(_.getMetadata.getName.equalsIgnoreCase("tools")).get
+        .getStatus.getPhase)
+      val isActive = Try(phase.get.equalsIgnoreCase("Active")).getOrElse(false)
+      if (isActive) client.namespaces.delete(buildNamespace(name)) else false
+    }
 
     def buildNamespace(name: String): Namespace = new NamespaceBuilder().withNewMetadata.withName(name).endMetadata.build()
 

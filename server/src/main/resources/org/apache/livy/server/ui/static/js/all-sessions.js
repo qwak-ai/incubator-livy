@@ -26,6 +26,7 @@ function loadSessionsTable(sessions) {
         tdWrap(session.kind) +
         tdWrap(session.state) +
         tdWrap(logLinks(session, "session")) +
+        tdWrap(killLink("sessions", session.id, ">> KILL JOB <<")) +
       "</tr>"
     );
   });
@@ -39,7 +40,7 @@ function loadBatchesTable(sessions) {
         tdWrap(appIdLink(session)) +
         tdWrap(session.state) +
         tdWrap(logLinks(session, "batch")) +
-        tdWrap(killLink(session.id, ">> KILL JOB <<")) +
+        tdWrap(killLink("batches", session.id, ">> KILL JOB <<")) +
       "</tr>"
     );
   });
@@ -57,8 +58,8 @@ function ajaxFunction(url, callback, httpMethod) {
     xhttp.send();
 }
 
-function deleteConfirm(id) {
-    var url            = prependBasePath("/batches/kill/" + id);
+function deleteConfirm(type, id) {
+    var url            = prependBasePath("/" + type + "/kill/" + id);
     var httpMethod     = "DELETE";
     var deleteCallback = function() { alert("Batch [ " + id + " ] killed!"); };
     this.ajaxFunction(url, deleteCallback, httpMethod);
