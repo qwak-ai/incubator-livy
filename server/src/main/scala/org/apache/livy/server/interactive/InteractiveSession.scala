@@ -78,7 +78,7 @@ object InteractiveSession extends Logging {
 
       val masterSpecificConf = if (livyConf.isRunningOnKubernetes) {
         val namespace = KubernetesUtils.generateKubernetesNamespace(appTag.toLowerCase, livyConf.get(LivyConf.KUBERNETES_SPARK_NAMESPACE_PREFIX), request.conf)
-        KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace)
+        KubernetesUtils.prepareKubernetesNamespace(livyConf, namespace, appTag)
         KubernetesUtils.prepareKubernetesSpecificConf(namespace, request)
       } else {
         Map()
@@ -477,8 +477,8 @@ class InteractiveSession(
     var killed = false
     try {
       transition(SessionState.ShuttingDown)
-      sessionStore.remove(RECOVERY_SESSION_TYPE, id)
       client.foreach { _.stop(true) }
+      sessionStore.remove(RECOVERY_SESSION_TYPE, id)
     } catch {
       case _: Exception =>
         app.foreach {

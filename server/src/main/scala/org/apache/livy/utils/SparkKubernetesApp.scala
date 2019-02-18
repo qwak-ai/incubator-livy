@@ -449,6 +449,25 @@ object KubernetesExtensions {
 
     def buildNamespace(name: String): Namespace = new NamespaceBuilder().withNewMetadata.withName(name).endMetadata.build()
 
+    def createMonitoringService(namespace: String, appTag: String, portName: String, port: Int, k8sApp: String = "spark-metrics"): Service = {
+      client.services.create(buildService(namespace, appTag, portName, port, k8sApp))
+    }
+
+    def buildService(namespace: String, appTag: String, portName: String, port: Int, k8sApp: String = "spark-metrics"): Service = {
+      new ServiceBuilder()
+        .withNewMetadata()
+          .withName("spark-monitoring")
+          .withNamespace(namespace)
+          .withLabels(Map(("k8s-app", k8sApp)).asJava)
+          .endMetadata()
+        .withNewSpec()
+          .withClusterIP("None")
+          .withSelector(Map(("spark-app-tag", appTag)).asJava)
+          .withPorts(new ServicePortBuilder().withName(portName).withPort(port).build())
+          .endSpec()
+        .build()
+    }
+
     def createOrReplaceImagePullSecret(namespace: String, name: String, content: String): Secret = {
       val secret = new SecretBuilder()
         .withNewMetadata().withName(name).withNamespace(namespace).endMetadata
@@ -520,7 +539,7 @@ object KubernetesUtils extends Logging {
     BaseEncoding.base64.encode(s"""{"auths":{"$registry":{"auth":"$auth"}}}""".getBytes(Charsets.UTF_8))
   }
 
-  def prepareKubernetesNamespace(livyConf: LivyConf, namespace: String): Unit = {
+  def prepareKubernetesNamespace(livyConf: LivyConf, namespace: String, appTag: String): Unit = {
     import KubernetesExtensions._
     import SparkKubernetesApp.kubernetesClient
 
@@ -533,6 +552,7 @@ object KubernetesUtils extends Logging {
       "ImagePullSecret config options should either be set all or none: livy.server.kubernetes.imagePullSecret.[name, registry, user, password]")
     val secretContent = encodeImagePullSecretContent(registry.get, user.get, password.get)
     kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, secretName.get, secretContent)
+    kubernetesClient.inAnyNamespace.createMonitoringService(namespace, appTag, "metrics", 8088)
   }
 
   def prepareKubernetesSpecificConf(namespace: String, request: CreateBatchRequest): Map[String, String] = Map(

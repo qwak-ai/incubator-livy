@@ -167,7 +167,7 @@ object LivyConf {
   val KUBERNETES_CLIENT_CERT_FILE  = Entry("livy.server.kubernetes.clientCertFile", "")
 
   // How long to check livy session leakage
-  val KUBERNETES_APP_LOOKUP_TIMEOUT         = Entry("livy.server.kubernetes.app-lookup-timeout", "120s")
+  val KUBERNETES_APP_LOOKUP_TIMEOUT         = Entry("livy.server.kubernetes.app-lookup-timeout", "600s")
   // How often to check livy session leakage
   val KUBERNETES_POLL_INTERVAL              = Entry("livy.server.kubernetes.poll-interval", "15s")
   // Prefix to append to Spark Job namespace on its creation

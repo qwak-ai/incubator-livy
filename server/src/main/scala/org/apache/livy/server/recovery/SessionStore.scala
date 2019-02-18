@@ -91,8 +91,8 @@ class SessionStore(
    * Remove a session from the state store.
    */
   def remove(sessionType: String, id: Int): Unit = {
-    stateStore.remove(sessionRootPath(sessionType, id))
     logStore.remove(sessionRootPath(sessionType, id))
+    stateStore.remove(sessionRootPath(sessionType, id))
   }
 
   private def sessionManagerPath(sessionType: String): String =
