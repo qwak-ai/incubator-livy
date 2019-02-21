@@ -44,7 +44,7 @@ function anchorLink(link, inner) {
 }
 
 function killLink(type, id, inner) {
-  return '<input id="killjob" type="button" value="' + inner + '" onclick="deleteConfirm(\\"' + type + '\\",' + id + ');" />';
+  return '<input id="killjob" type="button" value="' + inner + '" onclick="deleteConfirm(\'' + type + '\',' + id + ');" />';
 }
 
 function historyServerLink(session) {
