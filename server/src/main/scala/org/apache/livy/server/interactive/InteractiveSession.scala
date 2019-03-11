@@ -488,7 +488,7 @@ class InteractiveSession(
         killed = true
     } finally {
       app.foreach( a ⇒ {
-        if (a.isInstanceOf[SparkKubernetesApp] && !killed) {
+        if (a.getClass.getSimpleName.toLowerCase.contains("kubernetes") && !killed) {
           a.kill()
         }
       })
