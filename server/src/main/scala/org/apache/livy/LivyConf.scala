@@ -172,6 +172,9 @@ object LivyConf {
   val KUBERNETES_POLL_INTERVAL              = Entry("livy.server.kubernetes.poll-interval", "15s")
   // Prefix to append to Spark Job namespace on its creation
   val KUBERNETES_SPARK_NAMESPACE_PREFIX     = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark-")
+
+  // Enable ImagePullSecret creation in Spark Job namespace
+  val KUBERNETES_IMAGE_PULL_SECRET_CREATE     = Entry("livy.server.kubernetes.imagePullSecret.create", false)
   // ImagePullSecret name to create in Spark Job namespace
   val KUBERNETES_IMAGE_PULL_SECRET_NAME     = Entry("livy.server.kubernetes.imagePullSecret.name", "")
   // ImagePullSecret registry
@@ -180,6 +183,10 @@ object LivyConf {
   val KUBERNETES_IMAGE_PULL_SECRET_USER     = Entry("livy.server.kubernetes.imagePullSecret.user", "")
   // ImagePullSecret password
   val KUBERNETES_IMAGE_PULL_SECRET_PASSWORD = Entry("livy.server.kubernetes.imagePullSecret.password", "")
+
+  // Enable Prometheus Operator ServiceMonitor creation in Spark Job namespace
+  // TODO describe default spec of ServiceMonitor created and available customizations
+  val KUBERNETES_SERVICE_MONITOR_CREATE     = Entry("livy.server.kubernetes.serviceMonitor.create", false)
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"

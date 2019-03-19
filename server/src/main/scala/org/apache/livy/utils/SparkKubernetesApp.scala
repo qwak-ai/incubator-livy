@@ -543,16 +543,25 @@ object KubernetesUtils extends Logging {
     import KubernetesExtensions._
     import SparkKubernetesApp.kubernetesClient
 
-    if (!kubernetesClient.containsNamespace(namespace)) kubernetesClient.createNamespace(namespace)
-    val secretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME).toOption
-    val registry = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_REGISTRY).toOption
-    val user = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_USER).toOption
-    val password = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_PASSWORD).toOption
-    require(Seq(secretName, registry, user, password).forall(_.isDefined) || Seq(secretName, registry, user, password).forall(_.isEmpty),
-      "ImagePullSecret config options should either be set all or none: livy.server.kubernetes.imagePullSecret.[name, registry, user, password]")
-    val secretContent = encodeImagePullSecretContent(registry.get, user.get, password.get)
-    kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, secretName.get, secretContent)
-    kubernetesClient.inAnyNamespace.createMonitoringService(namespace, appTag, "metrics", 8088)
+    if (!kubernetesClient.containsNamespace(namespace)) {
+      kubernetesClient.createNamespace(namespace)
+    }
+
+    if (livyConf.getBoolean(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_CREATE)) {
+      val secretName = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_NAME).toOption
+      val registry = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_REGISTRY).toOption
+      val user = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_USER).toOption
+      val password = livyConf.get(LivyConf.KUBERNETES_IMAGE_PULL_SECRET_PASSWORD).toOption
+      require(Seq(secretName, registry, user, password).forall(_.isDefined),
+        "ImagePullSecret config options should be set: livy.server.kubernetes.imagePullSecret.[name, registry, user, password]")
+      val secretContent = encodeImagePullSecretContent(registry.get, user.get, password.get)
+      kubernetesClient.inAnyNamespace.createOrReplaceImagePullSecret(namespace, secretName.get, secretContent)
+      info(s"ImagePullSecret [ ${secretName.get} ] in namespace [ $namespace ] is created...")
+    }
+
+    if (livyConf.getBoolean(LivyConf.KUBERNETES_SERVICE_MONITOR_CREATE)) {
+      kubernetesClient.inAnyNamespace.createMonitoringService(namespace, appTag, "metrics", 8088)
+    }
   }
 
   def prepareKubernetesSpecificConf(namespace: String, request: CreateBatchRequest): Map[String, String] = Map(
