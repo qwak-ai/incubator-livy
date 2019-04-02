@@ -174,7 +174,7 @@ object LivyConf {
   val KUBERNETES_SPARK_NAMESPACE_PREFIX     = Entry("livy.server.kubernetes.sparkNamespacePrefix", "spark-")
 
   // Enable ImagePullSecret creation in Spark Job namespace
-  val KUBERNETES_IMAGE_PULL_SECRET_CREATE     = Entry("livy.server.kubernetes.imagePullSecret.create", false)
+  val KUBERNETES_IMAGE_PULL_SECRET_CREATE   = Entry("livy.server.kubernetes.imagePullSecret.create", false)
   // ImagePullSecret name to create in Spark Job namespace
   val KUBERNETES_IMAGE_PULL_SECRET_NAME     = Entry("livy.server.kubernetes.imagePullSecret.name", "")
   // ImagePullSecret registry
@@ -186,7 +186,15 @@ object LivyConf {
 
   // Enable Prometheus Operator ServiceMonitor creation in Spark Job namespace
   // TODO describe default spec of ServiceMonitor created and available customizations
-  val KUBERNETES_SERVICE_MONITOR_CREATE     = Entry("livy.server.kubernetes.serviceMonitor.create", false)
+  val KUBERNETES_SERVICE_MONITOR_CREATE = Entry("livy.server.kubernetes.serviceMonitor.create", false)
+
+  val KUBERNETES_INGRESS_CREATE                  = Entry("livy.server.kubernetes.ingress.create", false)
+  val KUBERNETES_INGRESS_PROTOCOL                = Entry("livy.server.kubernetes.ingress.protocol", "http")
+  val KUBERNETES_INGRESS_HOST                    = Entry("livy.server.kubernetes.ingress.host", "localhost")
+  val KUBERNETES_INGRESS_ADDITIONAL_CONF_SNIPPET = Entry("livy.server.kubernetes.ingress.additionalConfSnippet", "")
+  val KUBERNETES_INGRESS_ADDITIONAL_ANNOTATIONS  = Entry("livy.server.kubernetes.ingress.additionalAnnotations", "")
+  // Is omitted if 'livy.server.kubernetes.ingress.protocol' value doesn't end with 's'
+  val KUBERNETES_INGRESS_TLS_SECRET_NAME         = Entry("livy.server.kubernetes.ingress.tls.secretName", "spark-cluster-tls")
 
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"

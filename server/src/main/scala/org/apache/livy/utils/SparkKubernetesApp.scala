@@ -23,9 +23,11 @@ import java.{lang, util}
 
 import com.google.common.base.Charsets
 import com.google.common.io.{BaseEncoding, Files}
+import io.fabric8.kubernetes.api.model.extensions._
 import io.fabric8.kubernetes.api.model.{ConfigBuilder ⇒ _, _}
 import io.fabric8.kubernetes.client._
 import io.fabric8.kubernetes.client.dsl.{FilterWatchListDeletable, PodResource}
+import org.apache.commons.lang3.StringUtils
 import org.apache.hadoop.fs.Options.CreateOpts
 import org.apache.hadoop.fs.{CreateFlag, FileContext, Path}
 import org.apache.livy.Utils.usingResource
@@ -147,13 +149,12 @@ class SparkKubernetesApp private[utils](
         val latestAppInfo = {
           val historyServerOption = Option(livyConf.get(LivyConf.HISTORY_SERVER_URL))
           val historyServerInfo = if (historyServerOption.isDefined) Option(s"${historyServerOption.get}/history/$appId/jobs/") else None
-          val driverMetadata = Try(driverPodOption.get.getMetadata)
-          val sparkUiInfo = if (driverMetadata.isSuccess) {
-            val meta = driverMetadata.get
-            Option(s"${Option(livyConf.get(LivyConf.SERVER_PROXY_URL)).getOrElse("")}/${meta.getNamespace}/${meta.getName}-svc/jobs/")
-          } else {
-            None
-          }
+          val sparkUiInfo = Try {
+            val protocol = livyConf.get(LivyConf.KUBERNETES_INGRESS_PROTOCOL)
+            val host = livyConf.get(LivyConf.KUBERNETES_INGRESS_HOST)
+            val basePath = driverPodOption.get.getMetadata.getLabels.get(KUBERNETES_SPARK_APP_TAG_LABEL).toLowerCase
+            s"$protocol://$host/$basePath/jobs/"
+          }.toOption
           AppInfo(sparkUiUrl = sparkUiInfo, historyServerUrl = historyServerInfo)
         }
         if (appInfo != latestAppInfo) {
@@ -449,23 +450,83 @@ object KubernetesExtensions {
 
     def buildNamespace(name: String): Namespace = new NamespaceBuilder().withNewMetadata.withName(name).endMetadata.build()
 
-    def createMonitoringService(namespace: String, appTag: String, portName: String, port: Int, k8sApp: String = "spark-metrics"): Service = {
-      client.services.create(buildService(namespace, appTag, portName, port, k8sApp))
+    def createSparkService(namespace: String, appTag: String, portName: String, port: Int, k8sApp: String, additionalSelectors: (String, String)*): Service = {
+      client.services.create(buildSparkService(namespace, appTag, portName, port, k8sApp, additionalSelectors: _*))
     }
 
-    def buildService(namespace: String, appTag: String, portName: String, port: Int, k8sApp: String = "spark-metrics"): Service = {
+    def buildSparkService(namespace: String, appTag: String, portName: String, port: Int, k8sApp: String, additionalSelectors: (String, String)*): Service = {
       new ServiceBuilder()
         .withNewMetadata()
-          .withName("spark-monitoring")
+          .withName(s"$k8sApp-$appTag".toLowerCase)
           .withNamespace(namespace)
-          .withLabels(Map(("k8s-app", k8sApp)).asJava)
+          .addToLabels("k8s-app", k8sApp)
           .endMetadata()
         .withNewSpec()
           .withClusterIP("None")
-          .withSelector(Map(("spark-app-tag", appTag)).asJava)
-          .withPorts(new ServicePortBuilder().withName(portName).withPort(port).build())
+          .addToSelector(KUBERNETES_SPARK_APP_TAG_LABEL, appTag)
+          .addToSelector(additionalSelectors.toMap.asJava)
+          .addNewPort()
+            .withName(portName)
+            .withPort(port)
+          .endPort()
           .endSpec()
         .build()
+    }
+
+    def createNginxIngress(namespace: String, protocol: String, host: String, basePath: String, serviceName: String, servicePort: String,
+        tlsSecretName: String, additionalConfSnippet: String, additionalAnnotations: (String, String)*): Ingress = {
+      client.extensions.ingresses.create(buildNginxIngress(
+        namespace, protocol, host, basePath, serviceName, servicePort, tlsSecretName, additionalConfSnippet, additionalAnnotations: _*
+      ))
+    }
+
+    // Be sure to set LF line separator on this file compilation
+    val NGINX_CONFIG_SNIPPET: String =
+      """
+        |proxy_set_header Accept-Encoding "";
+        |sub_filter_last_modified off;
+        |sub_filter '<head>' '<head> <base href="/%s/">';
+        |sub_filter 'href="/' 'href="';
+        |sub_filter 'src="/' 'src="';
+        |sub_filter "/api/v1/applications" "/%s/api/v1/applications";
+        |sub_filter "/static/executorspage-template.html" "/%s/static/executorspage-template.html";
+        |sub_filter_once off;
+        |sub_filter_types text/html text/css text/javascript application/javascript;
+      """.stripMargin
+
+    def buildNginxIngress(namespace: String, protocol: String, host: String, basePath: String, serviceName: String, servicePort: String,
+        tlsSecretName: String, additionalConfSnippet: String, additionalAnnotations: (String, String)*): Ingress = {
+      val builder = new IngressBuilder()
+        .withApiVersion("extensions/v1beta1")
+        .withNewMetadata()
+          .withName(StringUtils.stripEnd(StringUtils.left(s"spark-ui-ingress-$basePath", 63), "-"))
+          .withNamespace(namespace)
+          .addToAnnotations("kubernetes.io/ingress.class", "nginx")
+          .addToAnnotations("nginx.ingress.kubernetes.io/rewrite-target", "/$1")
+          .addToAnnotations("nginx.ingress.kubernetes.io/proxy-redirect-from", s"http://$$host/")
+          .addToAnnotations("nginx.ingress.kubernetes.io/proxy-redirect-to", s"/$basePath/")
+          .addToAnnotations("nginx.ingress.kubernetes.io/configuration-snippet", NGINX_CONFIG_SNIPPET.concat(additionalConfSnippet).format(basePath, basePath, basePath))
+          .addToAnnotations(additionalAnnotations.toMap.asJava)
+        .endMetadata()
+        .withNewSpec()
+          .addNewRule()
+            .withHost(host)
+            .withNewHttp()
+              .addNewPath()
+                .withPath(s"/$basePath/?(.*)")
+                .withNewBackend()
+                  .withServiceName(serviceName)
+                  .withNewServicePort(servicePort)
+                .endBackend()
+              .endPath()
+            .endHttp()
+          .endRule()
+        if (protocol.endsWith("s") && tlsSecretName != null && tlsSecretName.nonEmpty) {
+          builder.addNewTl().withSecretName(tlsSecretName).addToHosts(host).endTl()
+        }
+      builder
+        .endSpec()
+      .build()
     }
 
     def createOrReplaceImagePullSecret(namespace: String, name: String, content: String): Secret = {
@@ -560,7 +621,28 @@ object KubernetesUtils extends Logging {
     }
 
     if (livyConf.getBoolean(LivyConf.KUBERNETES_SERVICE_MONITOR_CREATE)) {
-      kubernetesClient.inAnyNamespace.createMonitoringService(namespace, appTag, "metrics", 8088)
+      kubernetesClient.inAnyNamespace.createSparkService(namespace, appTag, "metrics", 8088, "spark-metrics")
+    }
+
+    if (livyConf.getBoolean(LivyConf.KUBERNETES_INGRESS_CREATE)) {
+      val portName = "spark-ui"
+      val service = kubernetesClient.inAnyNamespace.createSparkService(namespace, appTag, portName, 4040, "spark-ui",
+        additionalSelectors = KUBERNETES_SPARK_ROLE_LABEL → KUBERNETES_SPARK_ROLE_DRIVER)
+
+      val protocol = livyConf.get(LivyConf.KUBERNETES_INGRESS_PROTOCOL)
+      val host = livyConf.get(LivyConf.KUBERNETES_INGRESS_HOST)
+      val basePath = appTag.toLowerCase
+      val serviceName = service.getMetadata.getName
+
+      val annotationsTry = Try(livyConf.get(LivyConf.KUBERNETES_INGRESS_ADDITIONAL_ANNOTATIONS)
+        .split(";").map(_.split("=")).map(array ⇒ array.head → array.tail.mkString("=")).toSeq)
+      if (annotationsTry.isFailure) logger.error(s"Ingress additional annotations parsing error: ${annotationsTry.failed.get.getMessage}")
+      val additionalAnnotations = annotationsTry.getOrElse(Seq.empty)
+      val additionalConfSnippet = livyConf.get(LivyConf.KUBERNETES_INGRESS_ADDITIONAL_CONF_SNIPPET)
+
+      val tlsSecretName = livyConf.get(LivyConf.KUBERNETES_INGRESS_TLS_SECRET_NAME)
+      kubernetesClient.inAnyNamespace.createNginxIngress(
+        namespace, protocol, host, basePath, serviceName, portName, tlsSecretName, additionalConfSnippet, additionalAnnotations: _*)
     }
   }
 
