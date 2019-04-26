@@ -25,8 +25,10 @@ import scala.tools.nsc.Settings
 import scala.tools.nsc.interpreter.{Completion, IMain, JPrintWriter, PresentationCompilerCompleter}
 import scala.tools.nsc.interpreter.Results.Result
 import scala.util.control.NonFatal
+
 import org.apache.spark.SparkConf
 import org.apache.spark.repl.SparkILoop
+
 import org.apache.livy.rsc.driver.SparkEntries
 
 /**
