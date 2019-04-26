@@ -221,7 +221,7 @@ object InteractiveSession extends Logging {
             if (new File(sparkHome, "RELEASE").isFile) {
               new File(sparkHome, "jars")
             } else {
-              new File(sparkHome, "assembly/target/scala-2.11/jars")
+              new File(sparkHome, "assembly/target/scala-2.12/jars")
             }
           case v =>
             throw new RuntimeException(s"Unsupported Spark major version: $sparkMajorVersion")
