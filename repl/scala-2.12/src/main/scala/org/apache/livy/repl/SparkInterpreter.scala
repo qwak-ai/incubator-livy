@@ -22,16 +22,11 @@ import java.net.URLClassLoader
 import java.nio.file.{Files, Paths}
 
 import scala.tools.nsc.Settings
-import scala.tools.nsc.interpreter.Completion.ScalaCompleter
-import scala.tools.nsc.interpreter.IMain
-import scala.tools.nsc.interpreter.JLineCompletion
-import scala.tools.nsc.interpreter.JPrintWriter
+import scala.tools.nsc.interpreter.{Completion, IMain, JPrintWriter, PresentationCompilerCompleter}
 import scala.tools.nsc.interpreter.Results.Result
 import scala.util.control.NonFatal
-
 import org.apache.spark.SparkConf
 import org.apache.spark.repl.SparkILoop
-
 import org.apache.livy.rsc.driver.SparkEntries
 
 /**
@@ -107,13 +102,13 @@ class SparkInterpreter(protected override val conf: SparkConf) extends AbstractS
   }
 
   override protected def completeCandidates(code: String, cursor: Int) : Array[String] = {
-    val completer : ScalaCompleter = {
+    val completer : Completion = {
       try {
         val cls = Class.forName("scala.tools.nsc.interpreter.PresentationCompilerCompleter")
         cls.getDeclaredConstructor(classOf[IMain]).newInstance(sparkILoop.intp)
-          .asInstanceOf[ScalaCompleter]
+          .asInstanceOf[Completion]
       } catch {
-        case e : ClassNotFoundException => new JLineCompletion(sparkILoop.intp).completer
+        case e : ClassNotFoundException => new PresentationCompilerCompleter(sparkILoop.intp)
       }
     }
     completer.complete(code, cursor).candidates.toArray
