@@ -190,6 +190,31 @@ class ScalaJobHandle[T] private[livy] (jobHandle: JobHandle[T]) extends Future[T
     getJavaFutureResult(jobHandle, atMost)
     this
   }
+
+  override def transform[S](f: Try[T] => Try[S])(implicit ex: ExecutionContext): Future[S] = {
+    import scala.concurrent.Promise
+    import scala.util.control.NonFatal
+    val p = Promise[S]()
+    onComplete { result =>
+      try p.complete(f(result)) catch {
+        case NonFatal(e) => p.failure(e)
+      }
+    }
+    p.future
+  }
+
+  override def transformWith[S]
+  (f: Try[T] => Future[S])(implicit ex: ExecutionContext): Future[S] = {
+    import scala.concurrent.Promise
+    import scala.util.control.NonFatal
+    val p = Promise[S]()
+    onComplete { result =>
+      try p.complete(f(result).value.get) catch {
+        case NonFatal(e) => p.failure(e)
+      }
+    }
+    p.future
+  }
 }
 
 private abstract class AbstractScalaJobHandleListener[T] extends Listener[T] {

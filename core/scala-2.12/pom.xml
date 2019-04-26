@@ -15,27 +15,39 @@
   ~ See the License for the specific language governing permissions and
   ~ limitations under the License.
 -->
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.apache.livy</groupId>
-  <artifactId>livy-repl_2.11</artifactId>
+  <artifactId>livy-core_2.12</artifactId>
   <version>0.7.0-incubating-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <parent>
     <groupId>org.apache.livy</groupId>
-    <artifactId>livy-repl-parent</artifactId>
+    <artifactId>livy-core-parent</artifactId>
     <version>0.7.0-incubating-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
   <properties>
-    <scala.version>${scala-2.11.version}</scala.version>
-    <scala.binary.version>2.11</scala.binary.version>
-    <spark.version>${spark.scala-2.11.version}</spark.version>
-    <netty.version>${netty.spark-2.11.version}</netty.version>
+    <scala.version>${scala-2.12.version}</scala.version>
+    <scala.binary.version>2.12</scala.binary.version>
   </properties>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>test-jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 
 </project>

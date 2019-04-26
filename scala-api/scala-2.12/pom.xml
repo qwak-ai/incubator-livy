@@ -18,36 +18,21 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.apache.livy</groupId>
-  <artifactId>livy-core_2.11</artifactId>
+  <artifactId>livy-scala-api_2.12</artifactId>
   <version>0.7.0-incubating-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <parent>
     <groupId>org.apache.livy</groupId>
-    <artifactId>livy-core-parent</artifactId>
+    <artifactId>livy-scala-api-parent</artifactId>
     <version>0.7.0-incubating-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
   <properties>
-    <scala.version>${scala-2.11.version}</scala.version>
-    <scala.binary.version>2.11</scala.binary.version>
+    <scala.version>${scala-2.12.version}</scala.version>
+    <scala.binary.version>2.12</scala.binary.version>
+    <spark.version>${spark.scala-2.12.version}</spark.version>
+    <netty.version>${netty.spark-2.12.version}</netty.version>
   </properties>
-
-  <build>
-    <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jar-plugin</artifactId>
-        <executions>
-          <execution>
-            <goals>
-              <goal>test-jar</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-    </plugins>
-  </build>
-
 </project>

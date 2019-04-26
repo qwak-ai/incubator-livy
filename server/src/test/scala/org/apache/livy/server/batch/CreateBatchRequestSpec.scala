@@ -17,7 +17,7 @@
 
 package org.apache.livy.server.batch
 
-import com.fasterxml.jackson.databind.{JsonMappingException, ObjectMapper}
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.scalatest.FunSpec
 
 import org.apache.livy.LivyBaseUnitTestSuite
