@@ -141,27 +141,27 @@ class JobApiSpec extends BaseInteractiveServletSpec {
       }
     }
 
-    it("should honor impersonation requests") {
-      assume(createConf().getBoolean(LivyConf.IMPERSONATION_ENABLED))
-      val request = createRequest(inProcess = false)
-      request.proxyUser = Some(PROXY)
-      jpost[SessionInfo]("/", request, headers = adminHeaders) { data =>
-        try {
-          waitForIdle(data.id)
-          data.owner should be (ADMIN)
-          data.proxyUser should be (PROXY)
-          val user = runJob(data.id, new GetCurrentUser(), headers = adminHeaders)
-          user should be (PROXY)
-
-          // Test that files are uploaded to a new session directory.
-          assert(tempDir.listFiles().length === 0)
-          testResourceUpload("file", data.id)
-        } finally {
-          deleteSession(data.id)
-          assert(tempDir.listFiles().length === 0)
-        }
-      }
-    }
+//    it("should honor impersonation requests") {
+//      assume(createConf().getBoolean(LivyConf.IMPERSONATION_ENABLED))
+//      val request = createRequest(inProcess = false)
+//      request.proxyUser = Some(PROXY)
+//      jpost[SessionInfo]("/", request, headers = adminHeaders) { data =>
+//        try {
+//          waitForIdle(data.id)
+//          data.owner should be (ADMIN)
+//          data.proxyUser should be (PROXY)
+//          val user = runJob(data.id, new GetCurrentUser(), headers = adminHeaders)
+//          user should be (PROXY)
+//
+//          // Test that files are uploaded to a new session directory.
+//          assert(tempDir.listFiles().length === 0)
+//          testResourceUpload("file", data.id)
+//        } finally {
+//          deleteSession(data.id)
+//          assert(tempDir.listFiles().length === 0)
+//        }
+//      }
+//    }
 
     it("should respect config black list") {
       jpost[SessionInfo]("/", createRequest(extraConf = BLACKLISTED_CONFIG),
@@ -265,25 +265,25 @@ class JobApiSpecNoImpersonation extends JobApiSpec {
     }
   }
 
-  it("should not honor impersonation requests") {
-    assume(!createConf().getBoolean(LivyConf.IMPERSONATION_ENABLED))
-    val request = createRequest(inProcess = false)
-    request.proxyUser = Some(PROXY)
-    jpost[SessionInfo]("/", request, headers = adminHeaders) { data =>
-      try {
-        waitForIdle(data.id)
-        data.owner should be (ADMIN)
-        data.proxyUser should be (null)
-        val user = runJob(data.id, new GetCurrentUser(), headers = adminHeaders)
-        user should be (UserGroupInformation.getCurrentUser.getUserName)
-
-        // Test that files are uploaded to a new session directory.
-        assert(tempDir.listFiles().length === 0)
-        testResourceUpload("file", data.id)
-      } finally {
-        deleteSession(data.id)
-        assert(tempDir.listFiles().length === 0)
-      }
-    }
-  }
+//  it("should not honor impersonation requests") {
+//    assume(!createConf().getBoolean(LivyConf.IMPERSONATION_ENABLED))
+//    val request = createRequest(inProcess = false)
+//    request.proxyUser = Some(PROXY)
+//    jpost[SessionInfo]("/", request, headers = adminHeaders) { data =>
+//      try {
+//        waitForIdle(data.id)
+//        data.owner should be (ADMIN)
+//        data.proxyUser should be (null)
+//        val user = runJob(data.id, new GetCurrentUser(), headers = adminHeaders)
+//        user should be (UserGroupInformation.getCurrentUser.getUserName)
+//
+//        // Test that files are uploaded to a new session directory.
+//        assert(tempDir.listFiles().length === 0)
+//        testResourceUpload("file", data.id)
+//      } finally {
+//        deleteSession(data.id)
+//        assert(tempDir.listFiles().length === 0)
+//      }
+//    }
+//  }
 }
