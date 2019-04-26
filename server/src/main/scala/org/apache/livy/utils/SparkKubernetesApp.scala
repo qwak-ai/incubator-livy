@@ -151,7 +151,8 @@ class SparkKubernetesApp private[utils] (
           Clock.sleep(pollInterval.toMillis)
 
           // Refresh application state
-          val appReport = kubernetesClient.getApplicationReport(app, cacheLogSize = cacheLogSize)
+          val appReport =
+            kubernetesClient.getApplicationReport(livyConf, app, cacheLogSize = cacheLogSize)
           kubernetesAppLog = appReport.getApplicationLog
           kubernetesDiagnostics = appReport.getApplicationDiagnostics
           changeState(mapKubernetesState(appReport.getApplicationState, appTag))
@@ -318,7 +319,7 @@ class KubernetesApplication(driverPod: Pod) {
 }
 
 class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
-  appLog: IndexedSeq[String], ingress: Option[Ingress]) {
+  appLog: IndexedSeq[String], ingress: Option[Ingress], livyConf: LivyConf) {
 
   def getApplicationState: String =
     driver.map(_.getStatus.getPhase.toLowerCase).getOrElse("unknown")
@@ -330,9 +331,7 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
     val path = driver
       .map(_.getMetadata.getLabels.getOrDefault(KubernetesConstants.SPARK_APP_TAG_LABEL, "unknown"))
       .getOrElse("unknown")
-    val tlsEnabled = ingress.exists(_.getSpec.getTls.isEmpty)
-    var protocol = "http"
-    if (tlsEnabled) protocol += "s"
+    val protocol = livyConf.get(LivyConf.KUBERNETES_INGRESS_PROTOCOL)
     s"$protocol://${host.getOrElse("")}/$path"
   }
 
@@ -414,6 +413,7 @@ object KubernetesExtensions {
     }
 
     def getApplicationReport(
+      livyConf: LivyConf,
       app: KubernetesApplication,
       cacheLogSize: Int,
       appTagLabel: String = SPARK_APP_TAG_LABEL
@@ -432,11 +432,20 @@ object KubernetesExtensions {
       val ingress = client.extensions.ingresses.inNamespace(app.getApplicationNamespace)
         .withLabel(SPARK_APP_TAG_LABEL, app.getApplicationTag)
         .list.getItems.asScala.headOption
-      new KubernetesAppReport(driver, executors, appLog, ingress)
+      new KubernetesAppReport(driver, executors, appLog, ingress, livyConf)
     }
 
     def createSparkUIIngress(app: KubernetesApplication, livyConf: LivyConf): Unit = {
       val sparkUIService = buildSparkUIService(app)
+
+      val annotationsString = livyConf.get(LivyConf.KUBERNETES_INGRESS_ADDITIONAL_ANNOTATIONS)
+      var annotations: Seq[(String, String)] = Seq.empty
+      if (annotationsString != null && annotationsString.trim.nonEmpty) {
+        annotations = annotationsString
+          .split(";").map(_.split("="))
+          .map(array => array.head -> array.tail.mkString("=")).toSeq
+      }
+
       val sparkUIIngress = buildSparkUIIngress(
         app,
         livyConf.get(LivyConf.KUBERNETES_INGRESS_PROTOCOL),
@@ -444,9 +453,7 @@ object KubernetesExtensions {
         sparkUIService,
         livyConf.get(LivyConf.KUBERNETES_INGRESS_TLS_SECRET_NAME),
         livyConf.get(LivyConf.KUBERNETES_INGRESS_ADDITIONAL_CONF_SNIPPET),
-        livyConf.get(LivyConf.KUBERNETES_INGRESS_ADDITIONAL_ANNOTATIONS)
-          .split(";").map(_.split("="))
-          .map(array => array.head -> array.tail.mkString("=")).toSeq: _*
+        annotations: _*
       )
       val resources: Seq[HasMetadata] = Seq(sparkUIService, sparkUIIngress)
       addOwnerReference(app.getApplicationPod, resources: _*)
@@ -458,18 +465,22 @@ object KubernetesExtensions {
       tlsSecretName: String, additionalConfSnippet: String, additionalAnnotations: (String, String)*
     ): Ingress = {
       val appTag = app.getApplicationTag
+
+      val annotations = Map(
+        "kubernetes.io/ingress.class" -> "nginx",
+        "nginx.ingress.kubernetes.io/rewrite-target" -> "/$1",
+        "nginx.ingress.kubernetes.io/proxy-redirect-from" -> s"http://$$host/",
+        "nginx.ingress.kubernetes.io/proxy-redirect-to" -> s"/$appTag/",
+        "nginx.ingress.kubernetes.io/configuration-snippet" ->
+          NGINX_CONFIG_SNIPPET.concat(additionalConfSnippet).format(appTag, appTag, appTag)
+      ) ++ additionalAnnotations
+
       val builder = new IngressBuilder()
         .withApiVersion("extensions/v1beta1")
         .withNewMetadata()
         .withName(fixResourceName(s"${app.getApplicationPod.getMetadata.getName}-ui"))
         .withNamespace(app.getApplicationNamespace)
-        .addToAnnotations("kubernetes.io/ingress.class", "nginx")
-        .addToAnnotations("nginx.ingress.kubernetes.io/rewrite-target", "/$1")
-        .addToAnnotations("nginx.ingress.kubernetes.io/proxy-redirect-from", s"http://$$host/")
-        .addToAnnotations("nginx.ingress.kubernetes.io/proxy-redirect-to", s"/$appTag/")
-        .addToAnnotations("nginx.ingress.kubernetes.io/configuration-snippet",
-          NGINX_CONFIG_SNIPPET.concat(additionalConfSnippet).format(appTag, appTag, appTag))
-        .addToAnnotations(additionalAnnotations.toMap.asJava)
+        .addToAnnotations(annotations.asJava)
         .addToLabels(SPARK_APP_TAG_LABEL, appTag)
         .addToLabels(CREATED_BY_LIVY_LABEL.asJava)
         .endMetadata()

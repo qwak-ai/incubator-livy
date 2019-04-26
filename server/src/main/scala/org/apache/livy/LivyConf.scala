@@ -254,7 +254,6 @@ object LivyConf {
   val KUBERNETES_INGRESS_TLS_SECRET_NAME =
     Entry("livy.server.kubernetes.ingress.tls.secretName", "spark-cluster-tls")
 
-
   // Whether session timeout should be checked, by default it will be checked, which means inactive
   // session will be stopped after "livy.server.session.timeout"
   val SESSION_TIMEOUT_CHECK = Entry("livy.server.session.timeout-check", true)
