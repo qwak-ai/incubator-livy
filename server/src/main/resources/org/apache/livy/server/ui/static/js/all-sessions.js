@@ -25,7 +25,7 @@ function loadSessionsTable(sessions) {
         tdWrap(session.proxyUser) +
         tdWrap(session.kind) +
         tdWrap(session.state) +
-        tdWrap(logLinks(session, "session")) +
+        tdWrapWithClass(logLinks(session, "session"), "with-scroll-bar") +
         "</tr>"
     );
   });

@@ -52,10 +52,23 @@ function driverLogLink(session) {
   }
 }
 
+function executorsLogLinks(session) {
+  var executorsLogUrls = session.appInfo.executorsLogUrls;
+  if (executorsLogUrls != null) {
+    return executorsLogUrls.split(";").map(function (pair) {
+      var nameAndLink = pair.split("#");
+      return divWrap(anchorLink(nameAndLink[1], nameAndLink[0]));
+    }).join("");
+  } else {
+    return "";
+  }
+}
+
 function logLinks(session, kind) {
   var sessionLog = divWrap(uiLink(kind + "/" + session.id + "/log", "session"));
   var driverLog =  divWrap(driverLogLink(session));
-  return sessionLog + driverLog;
+  var executorsLogs = executorsLogLinks(session);
+  return sessionLog + driverLog + executorsLogs;
 }
 
 function appIdLink(session) {
@@ -73,6 +86,18 @@ function tdWrap(val) {
     inner = val;
   }
   return "<td>" + inner + "</td>";
+}
+
+function tdWrapWithClass(val, cl) {
+  var inner = "";
+  if (val != null) {
+    inner = val;
+  }
+  var clVal = "";
+  if (cl != null) {
+      clVal = " class=\"" + cl + "\"";
+  }
+  return "<td" + clVal + ">" + inner + "</td>";
 }
 
 function preWrap(inner) {
