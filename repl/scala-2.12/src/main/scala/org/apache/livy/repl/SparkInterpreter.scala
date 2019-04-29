@@ -58,7 +58,7 @@ class SparkInterpreter(protected override val conf: SparkConf) extends AbstractS
     sparkILoop.initializeSynchronous()
 
     restoreContextClassLoader {
-      sparkILoop.setContextClassLoader()
+      sparkILoop.ensureClassLoader()
 
       var classLoader = Thread.currentThread().getContextClassLoader
       while (classLoader != null) {
