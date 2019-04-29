@@ -196,19 +196,17 @@ class SparkKubernetesApp private[utils] (
       ("\nKubernetes Diagnostics: " +: kubernetesDiagnostics)
 
   override def kill(): Unit = synchronized {
-    if (isRunning) {
-      try {
-        kubernetesClient.killApplication(Await.result(appPromise.future, appLookupTimeout))
-      } catch {
-        // We cannot kill the Kubernetes app without the appTag.
-        // There's a chance the Kubernetes app hasn't been submitted during a livy-server failure.
-        // We don't want a stuck session that can't be deleted. Emit a warning and move on.
-        case _: TimeoutException | _: InterruptedException =>
-          warn("Deleting a session while its Kubernetes application is not found.")
-          kubernetesAppMonitorThread.interrupt()
-      } finally {
-        process.foreach(_.destroy())
-      }
+    try {
+      kubernetesClient.killApplication(Await.result(appPromise.future, appLookupTimeout))
+    } catch {
+      // We cannot kill the Kubernetes app without the appTag.
+      // There's a chance the Kubernetes app hasn't been submitted during a livy-server failure.
+      // We don't want a stuck session that can't be deleted. Emit a warning and move on.
+      case _: TimeoutException | _: InterruptedException =>
+        warn("Deleting a session while its Kubernetes application is not found.")
+        kubernetesAppMonitorThread.interrupt()
+    } finally {
+      process.foreach(_.destroy())
     }
   }
 
