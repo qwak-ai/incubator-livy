@@ -24,7 +24,7 @@ import org.apache.livy.LivyConf
 object AppInfo {
   val DRIVER_LOG_URL_NAME = "driverLogUrl"
   val SPARK_UI_URL_NAME = "sparkUiUrl"
-  val EXECUTORS_LOG_URLS_NAME = "executorsLogUrls"
+  val EXECUTORS_LOG_URLS_NAME = "executorLogUrls"
 }
 
 case class AppInfo(

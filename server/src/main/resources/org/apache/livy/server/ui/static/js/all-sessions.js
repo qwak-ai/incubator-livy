@@ -38,7 +38,7 @@ function loadBatchesTable(sessions) {
         tdWrap(session.id) +
         tdWrap(appIdLink(session)) +
         tdWrap(session.state) +
-        tdWrap(logLinks(session, "batch")) +
+        tdWrapWithClass(logLinks(session, "batch"), "with-scroll-bar") +
         "</tr>"
     );
   });

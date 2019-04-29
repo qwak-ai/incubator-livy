@@ -53,9 +53,9 @@ function driverLogLink(session) {
 }
 
 function executorsLogLinks(session) {
-  var executorsLogUrls = session.appInfo.executorsLogUrls;
-  if (executorsLogUrls != null) {
-    return executorsLogUrls.split(";").map(function (pair) {
+  var executorLogUrls = session.appInfo.executorLogUrls;
+  if (executorLogUrls != null) {
+    return executorLogUrls.split(";").map(function (pair) {
       var nameAndLink = pair.split("#");
       return divWrap(anchorLink(nameAndLink[1], nameAndLink[0]));
     }).join("");

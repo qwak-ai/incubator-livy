@@ -334,7 +334,7 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
     import KubernetesConstants._
     if (livyConf.getBoolean(LivyConf.KUBERNETES_GRAFANA_LOKI_ENABLED)) {
       val appTag = driver.map(_.getMetadata.getLabels.get(SPARK_APP_TAG_LABEL))
-      if (appTag != null) {
+      if (appTag.isDefined && appTag.get != null) {
         val grafanaUrl = livyConf.get(LivyConf.KUBERNETES_GRAFANA_URL)
         val timeRange = livyConf.get(LivyConf.KUBERNETES_GRAFANA_TIME_RANGE)
         val lokiDatasource = livyConf.get(LivyConf.KUBERNETES_GRAFANA_LOKI_DATASOURCE)
@@ -343,7 +343,7 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
         return Some(
           s"""$grafanaUrl/explore?left=""" + URLEncoder.encode(
             s"""["now-$timeRange","now","$lokiDatasource",""" +
-              s"""{"expr":"{$sparkAppTagLogLabel=\\"$appTag\\",""" +
+              s"""{"expr":"{$sparkAppTagLogLabel=\\"${appTag.get}\\",""" +
               s"""$sparkRoleLogLabel=\\"$SPARK_ROLE_DRIVER\\"}"},""" +
               s"""{"ui":[true,true,true,"exact"]}]""", "UTF-8")
         )
@@ -370,7 +370,7 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
             s"""{"expr":"{$sparkAppTagLogLabel=\\"$sparkAppTag\\",""" +
             s"""$sparkRoleLogLabel=\\"$SPARK_ROLE_EXECUTOR\\",""" +
             s"""$sparkExecIdLogLabel=\\"$sparkExecId\\"}"},""" +
-            s"""{"ui":[true,true,true,"none"]}]""", "UTF-8")
+            s"""{"ui":[true,true,true,"exact"]}]""", "UTF-8")
       })
       if (urls.nonEmpty) return Some(urls.mkString(";"))
     }
