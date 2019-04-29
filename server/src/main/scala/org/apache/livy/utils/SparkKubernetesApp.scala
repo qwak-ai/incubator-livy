@@ -333,18 +333,21 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
   def getApplicationLog: IndexedSeq[String] = appLog
 
   def getDriverLogUrl: Option[String] = {
+    import KubernetesConstants._
     if (livyConf.getBoolean(LivyConf.KUBERNETES_GRAFANA_LOKI_ENABLED)) {
-      val namespace = driver.map(_.getMetadata.getNamespace)
-      val driverPodName = driver.map(_.getMetadata.getName)
-      if (namespace.isDefined && driverPodName.isDefined) {
+      val appTag = driver.map(_.getMetadata.getLabels.get(SPARK_APP_TAG_LABEL))
+      if (appTag != null) {
         val grafanaUrl = livyConf.get(LivyConf.KUBERNETES_GRAFANA_URL)
         val timeRange = livyConf.get(LivyConf.KUBERNETES_GRAFANA_TIME_RANGE)
         val lokiDatasource = livyConf.get(LivyConf.KUBERNETES_GRAFANA_LOKI_DATASOURCE)
+        val sparkAppTagLogLabel = SPARK_APP_TAG_LABEL.replaceAll("-", "_")
+        val sparkRoleLogLabel = SPARK_ROLE_LABEL.replaceAll("-", "_")
         return Some(
           s"""$grafanaUrl/explore?left=""" + URLEncoder.encode(
             s"""["now-$timeRange","now","$lokiDatasource",""" +
-              s"""{"expr":"{job=\\"${namespace.get}/${driverPodName.get}\\"}"},""" +
-              s"""{"ui":[true,true,true,"none"]}]""", "UTF-8")
+              s"""{"expr":"{$sparkAppTagLogLabel=\\"$appTag\\",""" +
+              s"""$sparkRoleLogLabel=\\"$SPARK_ROLE_DRIVER\\"}"},""" +
+              s"""{"ui":[true,true,true,"exact"]}]""", "UTF-8")
         )
       }
     }
@@ -358,6 +361,7 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
       val lokiDatasource = livyConf.get(LivyConf.KUBERNETES_GRAFANA_LOKI_DATASOURCE)
       val timeRange = livyConf.get(LivyConf.KUBERNETES_GRAFANA_TIME_RANGE)
       val sparkAppTagLogLabel = SPARK_APP_TAG_LABEL.replaceAll("-", "_")
+      val sparkRoleLogLabel = SPARK_ROLE_LABEL.replaceAll("-", "_")
       val sparkExecIdLogLabel = SPARK_EXEC_ID_LABEL.replaceAll("-", "_")
       val urls = executors.map(e => {
         val labels = e.getMetadata.getLabels
@@ -366,6 +370,7 @@ class KubernetesAppReport(driver: Option[Pod], executors: Seq[Pod],
         s"executor-$sparkExecId#$grafanaUrl/explore?left=" + URLEncoder.encode(
           s"""["now-$timeRange","now","$lokiDatasource",""" +
             s"""{"expr":"{$sparkAppTagLogLabel=\\"$sparkAppTag\\",""" +
+            s"""$sparkRoleLogLabel=\\"$SPARK_ROLE_EXECUTOR\\",""" +
             s"""$sparkExecIdLogLabel=\\"$sparkExecId\\"}"},""" +
             s"""{"ui":[true,true,true,"none"]}]""", "UTF-8")
       })
