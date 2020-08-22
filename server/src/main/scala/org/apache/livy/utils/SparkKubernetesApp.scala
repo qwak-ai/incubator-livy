@@ -65,9 +65,11 @@ object SparkKubernetesApp extends Logging {
                       warn(s"Leaked app with tag ${leakedApp.getKey} haven't been killed")
                     }
                   )
-                case None if (leakedApp.getValue - now) > sessionLeakageCheckTimeout =>
-                  leakedApps.remove()
+                case None =>
                   warn(s"Leaked app with tag ${leakedApp.getKey} doesn't exist")
+                  if (now - leakedApp.getValue > sessionLeakageCheckTimeout) {
+                    leakedApps.remove()
+                  }
               }
             }
           } catch {
