@@ -30,6 +30,10 @@
   <version>0.8.0-incubating-SNAPSHOT</version>
   <packaging>jar</packaging>
 
+  <properties>
+    <kubernetes.client.version>5.12.2</kubernetes.client.version>
+  </properties>
+
   <dependencies>
 
     <dependency>
@@ -87,6 +91,13 @@
     <dependency>
       <groupId>io.fabric8</groupId>
       <artifactId>kubernetes-client</artifactId>
+      <version>${kubernetes.client.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>com.fasterxml.jackson.core</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>

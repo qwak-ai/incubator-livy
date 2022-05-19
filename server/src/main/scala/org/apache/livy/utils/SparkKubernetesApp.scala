@@ -30,7 +30,7 @@ import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
 
 import io.fabric8.kubernetes.api.model.{HasMetadata, OwnerReferenceBuilder, Pod, Service, ServiceBuilder}
-import io.fabric8.kubernetes.api.model.extensions.{Ingress, IngressBuilder}
+import io.fabric8.kubernetes.api.model.networking.v1.{Ingress, IngressBuilder}
 import io.fabric8.kubernetes.client._
 import org.apache.commons.lang.StringUtils
 
@@ -498,7 +498,8 @@ private[utils] class LivyKubernetesClient(
   }
 
   private def getIngress(app: KubernetesApplication): Option[Ingress] = {
-    client.extensions.ingresses.inNamespace(app.getApplicationNamespace)
+    client.network.v1().ingresses()
+      .inNamespace(app.getApplicationNamespace)
       .withLabel(SPARK_APP_TAG_LABEL, app.getApplicationTag)
       .list.getItems.asScala.headOption
   }
@@ -553,8 +554,9 @@ private[utils] class LivyKubernetesClient(
         NGINX_CONFIG_SNIPPET.concat(additionalConfSnippet).format(appTag, appTag, appTag)
     ) ++ additionalAnnotations
 
+
     val builder = new IngressBuilder()
-      .withApiVersion("extensions/v1beta1")
+      .withApiVersion("networking.k8s.io/v1")
       .withNewMetadata()
       .withName(fixResourceName(s"${app.getApplicationPod.getMetadata.getName}-ui"))
       .withNamespace(app.getApplicationNamespace)
@@ -568,10 +570,6 @@ private[utils] class LivyKubernetesClient(
       .withNewHttp()
       .addNewPath()
       .withPath(s"/$appTag/?(.*)")
-      .withNewBackend()
-      .withServiceName(service.getMetadata.getName)
-      .withNewServicePort(service.getSpec.getPorts.get(0).getName)
-      .endBackend()
       .endPath()
       .endHttp()
       .endRule()
