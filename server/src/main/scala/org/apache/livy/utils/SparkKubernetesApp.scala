@@ -484,8 +484,13 @@ private[utils] class LivyKubernetesClient(
     val driver = pods.find(isDriver)
     val executors = pods.filter(isExecutor)
     val appLog = getApplicationLog(app, cacheLogSize)
-    val ingress = getIngress(app)
-    KubernetesAppReport(driver, executors, appLog, ingress, livyConf)
+
+    if (livyConf.getBoolean(LivyConf.KUBERNETES_INGRESS_CREATE)) {
+      val ingress = getIngress(app)
+      return KubernetesAppReport(driver, executors, appLog, ingress, livyConf)
+    }
+
+    KubernetesAppReport(driver, executors, appLog, None, livyConf)
   }
 
   private def getApplicationLog(
