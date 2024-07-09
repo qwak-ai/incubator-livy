@@ -30,6 +30,9 @@ import scala.tools.nsc.interpreter.Results.Result
 
 import org.apache.spark.SparkConf
 import org.apache.spark.repl.SparkILoop
+import scala.tools.nsc.settings.MutableSettings
+import scala.reflect.runtime
+import scala.reflect.runtime.universe._
 
 /**
  * This represents a Spark interpreter. It is not thread safe.
@@ -49,7 +52,10 @@ class SparkInterpreter(protected override val conf: SparkConf) extends AbstractS
     val settings = new Settings()
     settings.processArguments(List("-Yrepl-class-based",
       "-Yrepl-outdir", s"${outputDir.getAbsolutePath}"), true)
-    settings.usejavacp.value = true
+
+    val rm = runtime.currentMirror
+    val method = typeOf[MutableSettings].member(TermName("usejavacp")).asMethod
+    rm.reflect(settings).reflectMethod(method)().asInstanceOf[settings.BooleanSetting].value = true
     settings.embeddedDefaults(Thread.currentThread().getContextClassLoader())
 
     sparkILoop = new SparkILoop(None, new JPrintWriter(outputStream, true))
